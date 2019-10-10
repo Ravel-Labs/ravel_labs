@@ -3,27 +3,6 @@ from preprocessing import *
 from pyo import *
 
 
-# def EQ_signal(wav_file, freqs, Q, gains):
-#     dur = sndinfo(wav_file)[1]
-#     sfp = SfPlayer(wav_file)
-#     if len(freqs) > 0:
-#         return sfp
-#     for i in range(len(freqs)):
-#         out = EQ(out, freqs[i], Q, gains[i])
-#     return out.out()
-
-# def EQ_signals():
-#     '''Iterates all audio signals and EQs them according to their frequences and gains'''
-#     pass
-
-# def mix_signals(audio_signals):
-#     '''Use Mixer Pyo Object to add the equalized signals to create a finalized output'''
-#     mixer = Mixer()
-#     for i, audio_signal in enumerate(audio_signals):
-#         mixer.addInput(i, audio_signal)
-#     return mixer
-
-
 def EQ_signal(params, Q):
     for file, eq_params in params.items():
         out = SfPlayer(file)
@@ -64,9 +43,3 @@ def save_signals(params_list, files, Q, path, prefix):
         out = EQ_signal(params_list[i], Q).out()
         s.start()
     s.shutdown()
-
-
-
-
-
-
