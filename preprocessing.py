@@ -5,7 +5,7 @@ from scipy.fftpack import fft
 from scipy.stats import rankdata
 
 
-def export_params(path, files, rank_threshold, sr, max_n):
+def export_params(path, files, rank_threshold, window_size, hop_length, sr, max_n):
     '''
     This function takes a directory path, list of files, rank threshold,
     sample rate, and the number of top mask values and returns a list of
@@ -17,7 +17,7 @@ def export_params(path, files, rank_threshold, sr, max_n):
     for idx in range(len(files)):
         masker_path = os.path.join(path, files[idx])
         maskee_path = [os.path.join(path, files[i]) for i in range(len(files)) if i != idx]
-        mask_array = mask(masker_path, maskee_path, rank_threshold, sr, max_n)
+        mask_array = mask(masker_path, maskee_path, rank_threshold, window_size, hop_length,  sr, max_n)
         masker_dic = {masker_path: mask_array}
         params_list.append(masker_dic)
     return params_list
@@ -54,7 +54,7 @@ def fft_avg(audio_signal, window_size, hop_length, sr):
 	D_db = librosa.amplitude_to_db(D)
 	return np.mean(D_db, axis=1)
 
-def file_scraper(path): return [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
+def file_scraper(path): return [f for f in os.listdir(path) if not f.startswith('.') and os.path.isfile(os.path.join(path, f))]
 
 def freq_bin(signal, n, sr): return n * (sr / signal.shape[0])
 
@@ -182,7 +182,7 @@ def peak(audio_signal, time_constant, sr):
     alpha = forget_factor(time_constant, sr)
     peaks_squared = np.zeros(onset_env.shape)
     for i in range(1, len(peaks)):
-        peak_factor = alpha * onset_env[i-1]**2 + (1 - alpha) * np.absolute(x[i]**2)
+        peak_factor = alpha * onset_env[i-1]**2 + (1 - alpha) * np.absolute(x[i])**2
         peaks_squared[i] = max(x[i]**2, peak_factor)
     return peaks_squared
 
