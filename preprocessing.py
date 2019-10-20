@@ -1,9 +1,55 @@
 import os
 import librosa
 import numpy as np
+import pyloudnorm as pyln
+import scipy
 from scipy.fftpack import fft
 from scipy.stats import rankdata
 
+
+def attack(attack_max, crest_factor_n2):
+    return 2*attack_max / crest_factor_n2
+
+def cf_avg(signals, time_constant, sr):
+    sum = 0
+    for sig in signals:
+        x_peak = peak(sig, time_constant, sr)
+        x_rms = rms_squared(sig, time_constant, sr)
+        cf = np.mean(crest_factor(x_peak, x_rms))
+        sum += cf
+    return sum / len(signals)
+
+def compression_parameters(path, files, time_constant, order, cutoff, sr, std, attack_max, release_max):
+    compress_info = []
+    signal_paths = [os.path.join(path, files[i]) for i in range(len(files))]
+    signals = []
+    for sig in signal_paths:
+        y, _ = librosa.load(sig, sr=sr)
+        signals.append(y)
+    cfa = cf_avg(signals, time_constant, sr)
+    lfa = lf_avg(signals, order, cutoff, sr)
+    for i, signal in enumerate(signals):
+        w_p, cf = wp(signal, cfa, time_constant, sr, std)
+        w_f = lf_weighting(signal, lfa, order, cutoff, sr)
+        rms = np.mean(np.sqrt(rms_squared(signal, time_constant, sr)))
+        r = ratio(w_f, w_p)
+        t = threshold(rms, w_p)
+        kw = knee_width(t)
+        a = attack(attack_max, cf**2)
+        rel = release(release_max, cf**2)
+        compress_info.append([signal_paths[i], r, t, kw, a, rel])
+    return compress_info
+
+def crest_attack_release(attack_max, release_max, crest_factor_sq):
+    attack = (2 * attack_max) / crest_factor_sq
+    release = (2 * release_max) / crest_factor_sq - attack
+    return attack, release
+
+def crest_factor(rms, peaks): 
+    crest_factor = np.zeros(rms.shape)
+    crest_factor[0] = 0
+    crest_factor[1:] = peaks[1:] / rms[1:]
+    return np.sqrt(crest_factor)
 
 def export_params(path, files, rank_threshold, window_size, hop_length, sr, max_n):
     '''
@@ -56,7 +102,40 @@ def fft_avg(audio_signal, window_size, hop_length, sr):
 
 def file_scraper(path): return [f for f in os.listdir(path) if not f.startswith('.') and os.path.isfile(os.path.join(path, f))]
 
+def forget_factor(time_constant, sr): 
+    '''
+    Alpha signifies the forget factor for parameter autonomation equations
+    '''
+    return np.exp(-1 / (time_constant * sr))
+
 def freq_bin(signal, n, sr): return n * (sr / signal.shape[0])
+
+def half_wave_rectifier(x): return (x + np.absolute(x)) / 2
+
+def knee_width(thresh): return abs(thresh) / 2
+
+def lf_avg(signals, order, cutoff, sr):
+    sum = 0  
+    for sig in signals:
+        x_low = low_pass(sig, order, cutoff, sr)
+        fft_xlow = np.abs(librosa.core.stft(x_low, n_fft=1024, hop_length=512))
+        fft_x = np.abs(librosa.core.stft(sig, n_fft=1024, hop_length=512))
+        total = np.sum(fft_xlow / fft_x)
+        sum += total
+    return sum / 4
+
+def lf_weighting(signal, lf_avg, order, cutoff, sr):
+    lf_x = low_pass(signal, order, cutoff, sr)
+    x_low = np.abs(librosa.core.stft(lf_x, n_fft=1024, hop_length=512))
+    x = np.abs(librosa.core.stft(signal, n_fft=1024, hop_length=512))
+    lfe = np.sum(x_low / x)
+    return lfe / lf_avg
+
+def makeup_gain(x_in, x_out, rate):
+    meter = pyln.Meter(rate)
+    loudness_in = meter.integrated_loudness(x_in)
+    loudness_out = meter.integrated_loudness(x_out)
+    return loudness_in - loudness_out  
 
 def mask(signal_a, signals, rank_threshold, window_size, hop_length, sr, max_n):
     '''
@@ -142,6 +221,19 @@ def mask_2d(signals, rank_threshold, window_size, hop_length, sr, top_n):
                 mask_info.append([i, freq_bin, mask_ab])
     return mask_info
 
+def peak(audio_signal, time_constant, sr):
+    onset_env = librosa.onset.onset_strength(y=audio_signal, sr=sr, n_fft=1024, hop_length=512, aggregate=np.median)
+    peaks = librosa.util.peak_pick(onset_env, 3, 3, 3, 5, 0.5, 10)
+    peak_bool = np.array([1 if i in peaks else 0 for i in range(onset_env.shape[0])])
+    peak_mat = onset_env * peak_bool
+    x = np.mean(np.abs(librosa.core.stft(y, n_fft=1024, hop_length=512)), axis=0)
+    alpha = forget_factor(time_constant, sr)
+    peaks_squared = np.zeros(peak_mat.shape)
+    for i in range(1, len(peaks_squared)):
+        peak_factor = alpha * peak_mat[i-1]**2 + (1 - alpha) * np.absolute(x[i])**2
+        peaks_squared[i] = max(x[i]**2, peak_factor)
+    return peaks_squared 
+
 def rank_signal_1d(audio_signal):
 	return np.abs(rankdata(audio_signal, method='ordinal') - (audio_signal.shape[0] - 1))
 
@@ -151,9 +243,20 @@ def rank_signal_2d(audio_signal):
         a[:, row] = np.abs(rankdata(audio_signal[:, row], method='ordinal') - (audio_signal.shape[0] - 1))
     return a
 
-def spectrum(fft_signal): return np.mean(fft_signal, axis=0)
+def ratio(wp, wf):return 0.54*wp + 0.764*wf + 1
 
-def half_wave_rectifier(x): return (x + np.absolute(x)) / 2
+def release(release_max, crest_factor_n2):
+    return 2*release_max / crest_factor_n2
+
+def rms_squared(audio_signal, time_constant, sr):
+    alpha = forget_factor(time_constant, sr)
+    rms = librosa.feature.rms(audio_signal, frame_length=1024, hop_length=512)
+    rms_squared = np.zeros(rms.shape)
+    for i in range(1, rms.shape[1]):
+        rms_squared[0,i] = alpha * rms[0,i-1]**2 + (1-alpha)*np.absolute(audio_signal[i]**2)
+    return np.squeeze(rms_squared, axis=0) 
+
+def spectrum(fft_signal): return np.mean(fft_signal, axis=0)
 
 def spectral_flux(fft_signal):
     difference = np.zeros(fft_signal.shape)
@@ -162,43 +265,15 @@ def spectral_flux(fft_signal):
     spectral_flux = hwr / np.absolute(fft_signal)
     return np.sum(spectral_flux, axis=0)
 
-def forget_factor(time_constant, sr): 
-    '''
-    Alpha signifies the forget factor for parameter autonomation equations
-    '''
-    return np.exp(-1 / (time_constant * sr))
+def threshold(rms, wp):return -11.03 + 0.44*rms - 4.897*wp
 
-def rms_squared(audio_signal, time_constant, sr):
-    alpha = forget_factor(time_constant, sr)
-    rms = librosa.feature.rms(audio_signal, frame_length=1024, hop_length=512)
-    rms_squared = np.zeros(rms.shape)
-    for i in range(1, rms.shape[1]):
-        rms_squared[0,i] = alpha * rms[0,i-1]**2 + (1-alpha)*np.absolute(audio_signal[i]**2)
-    return np.squeeze(rms_squared, axis=0)
-
-def peak(audio_signal, time_constant, sr):
-    onset_env = librosa.onset.onset_strength(y=audio_signal, sr=sr)
-    x = np.mean(np.abs(librosa.core.stft(y, n_fft=1024, hop_length=512)), axis=0)
-    alpha = forget_factor(time_constant, sr)
-    peaks_squared = np.zeros(onset_env.shape)
-    for i in range(1, len(peaks)):
-        peak_factor = alpha * onset_env[i-1]**2 + (1 - alpha) * np.absolute(x[i])**2
-        peaks_squared[i] = max(x[i]**2, peak_factor)
-    return peaks_squared
-
-def crest_factor(rms, peaks): 
-    crest_factor = np.zeros(rms.shape)
-    crest_factor[0] = 0
-    crest_factor[1:] = peaks[1:] / rms[1:]
-    return np.sqrt(crest_factor)
-
-def crest_attack_release(attack_max, release_max, crest_factor_sq):
-    attack = (2 * attack_max) / crest_factor_sq
-    release = (2 * release_max) / crest_factor_sq - attack
-    return attack, release
-
-def sf_attack_release():
-    pass
-
-def make_up_gain(c_dev, c_est):
-    return -(c_dev + c_est)    
+def wp(signal, cf_avg, time_constant, sr, std):
+    x_peak = peak(signal, time_constant, sr)
+    x_rms = rms_squared(signal, time_constant, sr)
+    cf = np.mean(crest_factor(x_peak, x_rms))        
+    gaussian = ((cf - cf_avg)**2) / (2*(std**2))
+    if cf <= cf_avg:
+        wp = np.exp(gaussian)
+    else:
+        wp = 2 - np.exp(gaussian)
+    return wp, cf
