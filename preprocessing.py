@@ -8,7 +8,7 @@ from scipy.stats import rankdata
 
 
 def attack(attack_max, crest_factor_n2):
-    return 2*attack_max / crest_factor_n2
+    return (2*attack_max) / crest_factor_n2
 
 def cf_avg(signals, time_constant, sr):
     sum = 0
@@ -32,12 +32,12 @@ def compression_parameters(path, files, time_constant, order, cutoff, sr, std, a
         w_p, cf = wp(signal, cfa, time_constant, sr, std)
         w_f = lf_weighting(signal, lfa, order, cutoff, sr)
         rms = np.mean(np.sqrt(rms_squared(signal, time_constant, sr)))
-        r = ratio(w_f, w_p)
-        t = threshold(rms, w_p)
-        kw = knee_width(t)
-        a = attack(attack_max, cf**2)
-        rel = release(release_max, cf**2)
-        compress_info.append([signal_paths[i], r, t, kw, a, rel])
+        r = float(ratio(w_f, w_p))
+        t = float(threshold(rms, w_p))
+        kw = float(knee_width(t))
+        a = float(attack(attack_max, cf**2))
+        rel = float(release(release_max, cf**2))
+        compress_info.append([signal_paths[i],t, r, a, rel, kw])
     return compress_info
 
 def crest_attack_release(attack_max, release_max, crest_factor_sq):
@@ -130,6 +130,13 @@ def lf_weighting(signal, lf_avg, order, cutoff, sr):
     x = np.abs(librosa.core.stft(signal, n_fft=1024, hop_length=512))
     lfe = np.sum(x_low / x)
     return lfe / lf_avg
+
+def low_pass(signal, order, cutoff, sr):
+    nyq = sr * 0.5
+    normal_cutoff = cutoff / nyq
+    b,a = scipy.signal.butter(order, normal_cutoff)
+    y = scipy.signal.lfilter(b, a, signal)
+    return y
 
 def makeup_gain(x_in, x_out, rate):
     meter = pyln.Meter(rate)
@@ -226,7 +233,7 @@ def peak(audio_signal, time_constant, sr):
     peaks = librosa.util.peak_pick(onset_env, 3, 3, 3, 5, 0.5, 10)
     peak_bool = np.array([1 if i in peaks else 0 for i in range(onset_env.shape[0])])
     peak_mat = onset_env * peak_bool
-    x = np.mean(np.abs(librosa.core.stft(y, n_fft=1024, hop_length=512)), axis=0)
+    x = np.mean(np.abs(librosa.core.stft(audio_signal, n_fft=1024, hop_length=512)), axis=0)
     alpha = forget_factor(time_constant, sr)
     peaks_squared = np.zeros(peak_mat.shape)
     for i in range(1, len(peaks_squared)):
@@ -246,7 +253,7 @@ def rank_signal_2d(audio_signal):
 def ratio(wp, wf):return 0.54*wp + 0.764*wf + 1
 
 def release(release_max, crest_factor_n2):
-    return 2*release_max / crest_factor_n2
+    return (2*release_max) / crest_factor_n2
 
 def rms_squared(audio_signal, time_constant, sr):
     alpha = forget_factor(time_constant, sr)
