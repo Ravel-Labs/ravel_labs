@@ -10,13 +10,20 @@ from scipy.stats import rankdata
 def attack(attack_max, crest_factor_n2):
     return (2*attack_max) / crest_factor_n2
 
-def cf_avg(signals, time_constant, sr):
+# def cf_avg(signals, time_constant, sr):
+#     sum = 0
+#     for sig in signals:
+#         x_peak = peak(sig, time_constant, sr)
+#         x_rms = rms_squared(sig, time_constant, sr)
+#         cf = np.mean(crest_factor(x_peak, x_rms))
+#         sum += cf
+#     return sum / len(signals)
+
+def cf_avg(signals):
     sum = 0
     for sig in signals:
-        x_peak = peak(sig, time_constant, sr)
-        x_rms = rms_squared(sig, time_constant, sr)
-        cf = np.mean(crest_factor(x_peak, x_rms))
-        sum += cf
+        cfs = cf(sig)
+        sum += cfs
     return sum / len(signals)
 
 def compression_parameters(path, files, time_constant, order, cutoff, sr, std, attack_max, release_max):
@@ -26,18 +33,19 @@ def compression_parameters(path, files, time_constant, order, cutoff, sr, std, a
     for sig in signal_paths:
         y, _ = librosa.load(sig, sr=sr)
         signals.append(y)
-    cfa = cf_avg(signals, time_constant, sr)
+    cfa = cf_avg(signals)
     lfa = lf_avg(signals, order, cutoff, sr)
     for i, signal in enumerate(signals):
-        w_p, cf = wp(signal, cfa, time_constant, sr, std)
+        w_p, cf = wp(signal, cfa, std)
         w_f = lf_weighting(signal, lfa, order, cutoff, sr)
-        rms = np.mean(np.sqrt(rms_squared(signal, time_constant, sr)))
+        rms = librosa.feature.rms(signal, frame_length=1024, hop_length=512)
+        rms_db = np.mean(librosa.amplitude_to_db(rms))
         r = float(ratio(w_f, w_p))
-        t = float(threshold(rms, w_p))
+        t = float(threshold(rms_db, w_p))
         kw = float(knee_width(t))
         a = float(attack(attack_max, cf**2))
         rel = float(release(release_max, cf**2))
-        compress_info.append([signal_paths[i],t, r, a, rel, kw])
+        compress_info.append({signal_paths[i]:[t, r, a, rel, kw]})
     return compress_info
 
 def crest_attack_release(attack_max, release_max, crest_factor_sq):
@@ -45,7 +53,7 @@ def crest_attack_release(attack_max, release_max, crest_factor_sq):
     release = (2 * release_max) / crest_factor_sq - attack
     return attack, release
 
-def crest_factor(rms, peaks): 
+def crest_factor(peaks, rms): 
     crest_factor = np.zeros(rms.shape)
     crest_factor[0] = 0
     crest_factor[1:] = peaks[1:] / rms[1:]
@@ -119,8 +127,11 @@ def lf_avg(signals, order, cutoff, sr):
     for sig in signals:
         x_low = low_pass(sig, order, cutoff, sr)
         fft_xlow = np.abs(librosa.core.stft(x_low, n_fft=1024, hop_length=512))
+#         print(fft_xlow)
         fft_x = np.abs(librosa.core.stft(sig, n_fft=1024, hop_length=512))
-        total = np.sum(fft_xlow / fft_x)
+#         print(fft_x)
+        total = np.sum(np.divide(fft_xlow, fft_x, out=np.zeros_like(fft_xlow), where=fft_x!=0))
+#         total = np.sum(fft_xlow / fft_x)
         sum += total
     return sum / 4
 
@@ -128,7 +139,8 @@ def lf_weighting(signal, lf_avg, order, cutoff, sr):
     lf_x = low_pass(signal, order, cutoff, sr)
     x_low = np.abs(librosa.core.stft(lf_x, n_fft=1024, hop_length=512))
     x = np.abs(librosa.core.stft(signal, n_fft=1024, hop_length=512))
-    lfe = np.sum(x_low / x)
+    lfe = np.sum(np.divide(x_low, x, out=np.zeros_like(x_low), where=x!=0))
+#     lfe = np.sum(x_low / x)
     return lfe / lf_avg
 
 def low_pass(signal, order, cutoff, sr):
@@ -274,13 +286,19 @@ def spectral_flux(fft_signal):
 
 def threshold(rms, wp):return -11.03 + 0.44*rms - 4.897*wp
 
-def wp(signal, cf_avg, time_constant, sr, std):
-    x_peak = peak(signal, time_constant, sr)
-    x_rms = rms_squared(signal, time_constant, sr)
-    cf = np.mean(crest_factor(x_peak, x_rms))        
-    gaussian = ((cf - cf_avg)**2) / (2*(std**2))
-    if cf <= cf_avg:
+def wp(signal, cf_avg, std):
+    cfs = cf(signal)
+    gaussian = ((cfs - cf_avg)**2) / (2*(std**2))
+    if cfs <= cf_avg:
         wp = np.exp(gaussian)
     else:
         wp = 2 - np.exp(gaussian)
-    return wp, cf
+    return wp, cfs
+
+def cf(signal):
+    rms = librosa.feature.rms(signal, frame_length=1024, hop_length=512)
+    rms_db = np.mean(librosa.amplitude_to_db(rms))
+    D = np.abs(librosa.core.stft(signal, n_fft=1024, hop_length=512))
+    peak_db = librosa.amplitude_to_db(np.sum(D, axis=0)).max()
+    cf = peak_db / rms_db
+    return cf
