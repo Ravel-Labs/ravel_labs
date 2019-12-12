@@ -19,6 +19,16 @@ def attack(attack_max, crest_factor_n2):
 #         sum += cf
 #     return sum / len(signals)
 
+def audio_sparsity(r_y, min_y):
+    sparse_vec = np.zeros((1, r_y.shape[1]))
+    for i in range(r_y.shape[1]):
+        mu = np.mean(r_y.T[i])
+        if mu == min_y:
+            sparse_vec[0, i] = 0
+        else:
+            sparse_vec[0, i] = 1
+    return sparse_vec
+
 def cf_avg(signals):
     sum = 0
     for sig in signals:
@@ -107,6 +117,16 @@ def fft_avg(audio_signal, window_size, hop_length, sr):
 	D = np.abs(librosa.core.stft(y, n_fft=window_size, hop_length=hop_length))
 	D_db = librosa.amplitude_to_db(D)
 	return np.mean(D_db, axis=1)
+
+# def fft_chunk_avg(path, window_size, hop_length):
+#     sr = librosa.get_samplerate(path)
+#     y, sr = librosa.load(path, sr=sr)
+#     onset_env = librosa.onset.onset_strength(y, sr=sr)
+#     tempo = librosa.beat.tempo(onset_envelope=onset_env, sr=sr)
+#     D = np.abs(librosa.core.stft(y, n_fft=window_size, hop_length=hop_length))
+#     D_db = librosa.amplitude_to_db(D)
+#     D_s = librosa.core.frames_to_samples(D_db, hop_length=hop_length, n_fft=window_size)
+
 
 def file_scraper(path): return [f for f in os.listdir(path) if not f.startswith('.') and os.path.isfile(os.path.join(path, f))]
 
@@ -254,12 +274,12 @@ def peak(audio_signal, time_constant, sr):
     return peaks_squared 
 
 def rank_signal_1d(audio_signal):
-	return np.abs(rankdata(audio_signal, method='ordinal') - (audio_signal.shape[0] - 1))
+	return np.abs(rankdata(audio_signal, method='min') - (audio_signal.shape[0])) + 1
 
 def rank_signal_2d(audio_signal): 
     a = np.zeros(audio_signal.shape)
     for row in range(audio_signal.shape[1]):
-        a[:, row] = np.abs(rankdata(audio_signal[:, row], method='ordinal') - (audio_signal.shape[0] - 1))
+        a[:, row] = np.abs(rankdata(audio_signal[:, row], method='min') - (audio_signal.shape[0])) + 1
     return a
 
 def ratio(wp, wf):return 0.54*wp + 0.764*wf + 1
