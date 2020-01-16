@@ -43,3 +43,10 @@ def save_signals(params_list, files, Q, path, prefix):
         out = EQ_signal(params_list[i], Q).out()
         s.start()
     s.shutdown()
+
+# def save_sigs(params_list, files, Q, path, prefix):
+#     s = Server(audio='offline').boot()
+#     if not os.path.exists(path):
+#         os.mkdir(path)
+#     for i in range(len(params_list)):
+#         EQ_params = params_list[i][1:]

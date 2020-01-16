@@ -282,7 +282,7 @@ def mask(signal_a, signals, rank_threshold, window_size, hop_length, sr, max_n):
             mask_info.append([freq_bin, mask_val])
     return np.array(mask_info)
 
-def mask_chunks(paths, window_size, hop_length, seconds, rank_threshold, max_n, min_overlap_ratio):
+def mask_chunks(paths, window_size, hop_length, seconds, rank_threshold, max_n, min_overlap_ratio, max_eq):
     signals = [Signal(path=path, window_size=window_size, hop_length=hop_length) for path in paths]
     num_signals = len(signals)
     sr = signals[0].sr
@@ -293,8 +293,10 @@ def mask_chunks(paths, window_size, hop_length, seconds, rank_threshold, max_n, 
         sig.set_sparsity()
     overlap_mat = np.zeros((num_signals, num_signals))
     mask = np.array([])
-    mask_info = []
+    # mask_info = []
+    params_list = []
     for i in range(num_signals):
+        mask_info = []
         for j in range(num_signals):
             overlap_vec, num_overlaps, overlap_ratio = signals[i].overlap(signals[j].sparse_vec)
             overlap_mat[i][j] = overlap_ratio
@@ -310,13 +312,18 @@ def mask_chunks(paths, window_size, hop_length, seconds, rank_threshold, max_n, 
             else:
                 mask_ij = 0
         top_m = np.argsort(mask)[-max_n:]
+        # print(mask[top_m])
+        top_m_max = mask[top_m].max()
+        # print(top_m_max)
         idx = np.unravel_index(top_m, mask.shape)[0]
         for x in idx:
             freq_bin = (x % num_bins) * (sr / num_bins)
             mask_val = mask[x]
             if (mask_val) > 0 and (freq_bin <= 20000) and (freq_bin >= 20):
-                mask_info.append([signals[i].path, freq_bin, mask_val])
-    return mask_info
+                mask_val_scaled = (mask_val / top_m_max) * max_eq
+                mask_info.append([freq_bin, mask_val_scaled])
+        params_list.append({signals[i].path: mask_info})
+    return params_list
 
 def mask_2d(signals, rank_threshold, window_size, hop_length, sr, top_n):
     '''
