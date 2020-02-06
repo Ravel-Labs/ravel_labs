@@ -196,6 +196,10 @@ def fft_avg(audio_signal, window_size, hop_length, sr):
 
 def file_scraper(path): return [f for f in os.listdir(path) if not f.startswith('.') and os.path.isfile(os.path.join(path, f))]
 
+def full_file_scraper(path): 
+    files = [os.path.join(path, f) for f in os.listdir(path) if not f.startswith('.') and os.path.isfile(os.path.join(path, f))]
+    return files
+
 def forget_factor(time_constant, sr): 
     '''
     Alpha signifies the forget factor for parameter autonomation equations
