@@ -7,13 +7,15 @@ from scipy.fftpack import fft
 from scipy.stats import rankdata
 
 class Signal:
-    def __init__(self, path, window_size, hop_length):
+    def __init__(self, path, n_fft, window_size, hop_length):
         self.path = path
         self.sr = librosa.get_samplerate(self.path)
+        self.n_fft = n_fft
         self.window_size = window_size
         self.hop_length = hop_length
         self.signal, _ = librosa.load(self.path, sr=self.sr)
-        self.fft = np.abs(librosa.core.stft(self.signal, n_fft=self.window_size, hop_length=self.hop_length))
+        self.fft = np.abs(librosa.core.stft(self.signal, n_fft=self.n_fft, 
+                                            win_length=self.window_size, hop_length=self.hop_length))
         self.freq_bins = self.fft.shape[0]
         self.fft_db = librosa.amplitude_to_db(self.fft)
 
