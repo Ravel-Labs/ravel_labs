@@ -6,6 +6,72 @@ import scipy
 from scipy.fftpack import fft
 from scipy.stats import rankdata
 
+class Signal:
+    def __init__(self, path, n_fft, window_size, hop_length):
+        self.path = path
+        self.sr = librosa.get_samplerate(self.path)
+        self.n_fft = n_fft
+        self.window_size = window_size
+        self.hop_length = hop_length
+        self.signal, _ = librosa.load(self.path, sr=self.sr)
+        self.fft = np.abs(librosa.core.stft(self.signal, n_fft=self.n_fft, 
+                                            win_length=self.window_size, hop_length=self.hop_length))
+        self.freq_bins = self.fft.shape[0]
+        self.fft_db = librosa.amplitude_to_db(self.fft)
+
+    def set_chunk(self, seconds):
+        fft_length = self.fft_db.shape[1]
+        num_freqs = self.fft_db.shape[0]
+        chunk_size = int(np.ceil((1 / (self.window_size / self.sr)) * seconds))
+        total_chunks = int(np.ceil(fft_length / chunk_size))
+        avg_mat = np.zeros((num_freqs, total_chunks))
+        avg_vec = np.zeros((1, chunk_size))
+        for i in range(num_freqs):
+            for j in range(total_chunks):
+                if j > total_chunks - 1:
+                    avg_vec = self.fft_db[i][chunk_size * j:]
+                    mu = np.mean(avg_vec)
+                    avg_mat[i][j] = mu
+                avg_vec = self.fft_db[i][chunk_size * j: chunk_size * (j+1)]
+                mu = np.mean(avg_vec)
+                avg_mat[i][j] = mu
+        self.chunk_fft = avg_mat
+
+    def set_rank_2d(self): 
+        a = np.zeros(self.chunk_fft.shape)
+        for row in range(self.chunk_fft.shape[1]):
+            a[:, row] = np.abs(rankdata(self.chunk_fft[:, row], method='min') - (self.chunk_fft.shape[0])) + 1
+        self.rank = a
+
+    def set_sparsity(self):
+        sparse_vec = np.zeros((1, self.rank.shape[1]))
+        min_val = self.freq_bins
+        for i in range(self.rank.shape[1]):
+            mu = np.mean(self.rank.T[i])
+            if mu == min_val:
+                sparse_vec[0, i] = 0
+            else:
+                sparse_vec[0, i] = 1
+        self.sparse_vec = sparse_vec
+
+    def overlap(self, sv1):
+        overlap_vec = self.sparse_vec * sv1
+        num_overlaps = np.sum(overlap_vec)
+        overlap_ratio = num_overlaps / overlap_vec.shape[1]
+        return overlap_vec, num_overlaps, overlap_ratio
+
+    def sparse_overlap_avg(self, overlap_vec, num_overlaps):
+        soa_vec = np.zeros((self.freq_bins, 1))
+        for i in range(self.freq_bins):
+            soa_vec[i] = np.sum((self.chunk_fft[i] * self.sparse_vec) * overlap_vec) / num_overlaps
+        return soa_vec
+
+    def rank_soa_vec(self, soa_vec): return np.abs(rankdata(soa_vec, method='min') - (soa_vec.shape[0])) + 1
+
+    def masker_rank_vec(self, r_soa_vec): return np.expand_dims(np.where(r_soa_vec > 10, 1, 0), axis=1)
+
+    def maskee_rank_vec(self, r_soa_vec): return np.expand_dims(np.where(r_soa_vec <= 10, 1, 0), axis=1)
+
 
 def attack(attack_max, crest_factor_n2):
     return (2*attack_max) / crest_factor_n2
@@ -18,6 +84,16 @@ def attack(attack_max, crest_factor_n2):
 #         cf = np.mean(crest_factor(x_peak, x_rms))
 #         sum += cf
 #     return sum / len(signals)
+
+def audio_sparsity(r_y, min_y):
+    sparse_vec = np.zeros((1, r_y.shape[1]))
+    for i in range(r_y.shape[1]):
+        mu = np.mean(r_y.T[i])
+        if mu == min_y:
+            sparse_vec[0, i] = 0
+        else:
+            sparse_vec[0, i] = 1
+    return sparse_vec
 
 def cf_avg(signals):
     sum = 0
@@ -108,7 +184,21 @@ def fft_avg(audio_signal, window_size, hop_length, sr):
 	D_db = librosa.amplitude_to_db(D)
 	return np.mean(D_db, axis=1)
 
+# def fft_chunk_avg(path, window_size, hop_length):
+#     sr = librosa.get_samplerate(path)
+#     y, sr = librosa.load(path, sr=sr)
+#     onset_env = librosa.onset.onset_strength(y, sr=sr)
+#     tempo = librosa.beat.tempo(onset_envelope=onset_env, sr=sr)
+#     D = np.abs(librosa.core.stft(y, n_fft=window_size, hop_length=hop_length))
+#     D_db = librosa.amplitude_to_db(D)
+#     D_s = librosa.core.frames_to_samples(D_db, hop_length=hop_length, n_fft=window_size)
+
+
 def file_scraper(path): return [f for f in os.listdir(path) if not f.startswith('.') and os.path.isfile(os.path.join(path, f))]
+
+def full_file_scraper(path): 
+    files = [os.path.join(path, f) for f in os.listdir(path) if not f.startswith('.') and os.path.isfile(os.path.join(path, f))]
+    return files
 
 def forget_factor(time_constant, sr): 
     '''
@@ -198,6 +288,49 @@ def mask(signal_a, signals, rank_threshold, window_size, hop_length, sr, max_n):
             mask_info.append([freq_bin, mask_val])
     return np.array(mask_info)
 
+def mask_chunks(paths, window_size, hop_length, seconds, rank_threshold, max_n, min_overlap_ratio, max_eq):
+    signals = [Signal(path=path, window_size=window_size, hop_length=hop_length) for path in paths]
+    num_signals = len(signals)
+    sr = signals[0].sr
+    num_bins = signals[0].freq_bins
+    for sig in signals:
+        sig.set_chunk(seconds=seconds)
+        sig.set_rank_2d()
+        sig.set_sparsity()
+    overlap_mat = np.zeros((num_signals, num_signals))
+    mask = np.array([])
+    # mask_info = []
+    params_list = []
+    for i in range(num_signals):
+        mask_info = []
+        for j in range(num_signals):
+            overlap_vec, num_overlaps, overlap_ratio = signals[i].overlap(signals[j].sparse_vec)
+            overlap_mat[i][j] = overlap_ratio
+            if (overlap_ratio > min_overlap_ratio) and (i != j):
+                soa_vec_i = signals[i].sparse_overlap_avg(overlap_vec, num_overlaps)
+                soa_vec_j = signals[j].sparse_overlap_avg(overlap_vec, num_overlaps)
+                r_soa_vec_i = signals[i].rank_soa_vec(soa_vec_i)
+                r_soa_vec_j = signals[j].rank_soa_vec(soa_vec_j)
+                masker_vec_i = signals[i].masker_rank_vec(r_soa_vec_i)
+                maskee_vec_j = signals[j].maskee_rank_vec(r_soa_vec_j)
+                mask_ij = ((masker_vec_i * maskee_vec_j) * (soa_vec_i - soa_vec_j)).flatten()
+                mask = np.append(mask, mask_ij)
+            else:
+                mask_ij = 0
+        top_m = np.argsort(mask)[-max_n:]
+        # print(mask[top_m])
+        top_m_max = mask[top_m].max()
+        # print(top_m_max)
+        idx = np.unravel_index(top_m, mask.shape)[0]
+        for x in idx:
+            freq_bin = (x % num_bins) * (sr / num_bins)
+            mask_val = mask[x]
+            if (mask_val) > 0 and (freq_bin <= 20000) and (freq_bin >= 20):
+                mask_val_scaled = (mask_val / top_m_max) * max_eq
+                mask_info.append([freq_bin, mask_val_scaled])
+        params_list.append({signals[i].path: mask_info})
+    return params_list
+
 def mask_2d(signals, rank_threshold, window_size, hop_length, sr, top_n):
     '''
     This function returns a list of parameters that can be used during
@@ -254,12 +387,12 @@ def peak(audio_signal, time_constant, sr):
     return peaks_squared 
 
 def rank_signal_1d(audio_signal):
-	return np.abs(rankdata(audio_signal, method='ordinal') - (audio_signal.shape[0] - 1))
+	return np.abs(rankdata(audio_signal, method='min') - (audio_signal.shape[0])) + 1
 
 def rank_signal_2d(audio_signal): 
     a = np.zeros(audio_signal.shape)
     for row in range(audio_signal.shape[1]):
-        a[:, row] = np.abs(rankdata(audio_signal[:, row], method='ordinal') - (audio_signal.shape[0] - 1))
+        a[:, row] = np.abs(rankdata(audio_signal[:, row], method='min') - (audio_signal.shape[0])) + 1
     return a
 
 def ratio(wp, wf):return 0.54*wp + 0.764*wf + 1
