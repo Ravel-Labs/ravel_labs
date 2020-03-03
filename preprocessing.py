@@ -7,7 +7,7 @@ from scipy.fftpack import fft
 from scipy.stats import rankdata
 
 class Signal:
-    def __init__(self, path, n_fft, window_size, hop_length):
+    def __init__(self, path, n_fft, window_size, hop_length, R, bins, roll_percent):
         self.path = path
         self.sr = librosa.get_samplerate(self.path)
         self.n_fft = n_fft
@@ -18,10 +18,41 @@ class Signal:
                                             win_length=self.window_size, hop_length=self.hop_length))
         self.freq_bins = self.fft.shape[0]
         self.fft_db = librosa.amplitude_to_db(self.fft)
+        self.R = R
+        self.bins = bins
+        self.freqs = np.array([i * self.sr / self.fft.shape[0] for i in range(self.fft.shape[0])])
+        self.roll_percent = roll_percent
 
+    def compute_energy_percent(self):
+        total_energy = np.sum(self.chunk_fft)
+        energy_percents = []
+        for i in range(len(bins)-1):
+            arr = np.argwhere((self.freqs >= self.bins[i]) & (self.freqs < self.bins[i+1])).flatten()
+            bin_sum = np.sum([self.chunk_fft[i] for i in arr])
+            energy_percent = bin_sum / total_energy
+            energy_percents.append(energy_percent)
+        if energy_percents[0] < 0.2:
+            return self.bins[0]
+
+    def compute_rolloff(self):
+        rolloffs = librosa.feature.spectral_rolloff(self.signal, sr=self.sr, n_fft=self.n_fft, hop_length=self.hop_length, 
+                             win_length=self.window_size, roll_percent=self.roll_percent)
+        r_active = rolloffs[0, np.argwhere(b > 0).flatten()]
+        r_avg = np.mean(r_active)
+        return r_avg
+        
+    def set_norm_db(self):
+        """Calculate scalar for signal on a linear scale"""
+        x = self.signal
+        n = x.shape[0]
+        a = np.sqrt((n * self.R**2) / np.sum(x**2))
+        x_norm_db = librosa.amplitude_to_db(a * x)
+        self.norm_fft_db = np.abs(librosa.core.stft(x_norm_db, n_fft=self.n_fft, 
+                                            win_length=self.window_size, hop_length=self.hop_length))
+    
     def set_chunk(self, seconds):
-        fft_length = self.fft_db.shape[1]
-        num_freqs = self.fft_db.shape[0]
+        fft_length = self.norm_fft_db.shape[1]
+        num_freqs = self.norm_fft_db.shape[0]
         chunk_size = int(np.ceil((1 / (self.window_size / self.sr)) * seconds))
         total_chunks = int(np.ceil(fft_length / chunk_size))
         avg_mat = np.zeros((num_freqs, total_chunks))
@@ -29,10 +60,10 @@ class Signal:
         for i in range(num_freqs):
             for j in range(total_chunks):
                 if j > total_chunks - 1:
-                    avg_vec = self.fft_db[i][chunk_size * j:]
+                    avg_vec = self.norm_fft_db[i][chunk_size * j:]
                     mu = np.mean(avg_vec)
                     avg_mat[i][j] = mu
-                avg_vec = self.fft_db[i][chunk_size * j: chunk_size * (j+1)]
+                avg_vec = self.norm_fft_db[i][chunk_size * j: chunk_size * (j+1)]
                 mu = np.mean(avg_vec)
                 avg_mat[i][j] = mu
         self.chunk_fft = avg_mat
@@ -73,17 +104,13 @@ class Signal:
     def maskee_rank_vec(self, r_soa_vec): return np.expand_dims(np.where(r_soa_vec <= 10, 1, 0), axis=1)
 
 
+def apply_bfilter(signal, cutoff, sr, order, btype):
+    b, a = butter_filter(cutoff, sr, order, btype)
+    y = lfilter(b, a, signal)
+    return y
+    
 def attack(attack_max, crest_factor_n2):
     return (2*attack_max) / crest_factor_n2
-
-# def cf_avg(signals, time_constant, sr):
-#     sum = 0
-#     for sig in signals:
-#         x_peak = peak(sig, time_constant, sr)
-#         x_rms = rms_squared(sig, time_constant, sr)
-#         cf = np.mean(crest_factor(x_peak, x_rms))
-#         sum += cf
-#     return sum / len(signals)
 
 def audio_sparsity(r_y, min_y):
     sparse_vec = np.zeros((1, r_y.shape[1]))
@@ -94,6 +121,13 @@ def audio_sparsity(r_y, min_y):
         else:
             sparse_vec[0, i] = 1
     return sparse_vec
+
+def butter_bandpass(lowcut, highcut, fs, order):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band', analog=False)
+    return b, a
 
 def cf_avg(signals):
     sum = 0
@@ -288,21 +322,21 @@ def mask(signal_a, signals, rank_threshold, window_size, hop_length, sr, max_n):
             mask_info.append([freq_bin, mask_val])
     return np.array(mask_info)
 
-def mask_chunks(paths, window_size, hop_length, seconds, rank_threshold, max_n, min_overlap_ratio, max_eq):
-    signals = [Signal(path=path, window_size=window_size, hop_length=hop_length) for path in paths]
+def eq_chunks(paths, window_size, hop_length, seconds, R, bins, roll_percent, rank_threshold, max_n, min_overlap_ratio, max_eq):
+    signals = [Signal(path=path, window_size=window_size, hop_length=hop_length, R=R, bins=bins, roll_percent=roll_percent) for path in paths]
     num_signals = len(signals)
     sr = signals[0].sr
     num_bins = signals[0].freq_bins
     for sig in signals:
+        sig.set_norm_db()
         sig.set_chunk(seconds=seconds)
         sig.set_rank_2d()
         sig.set_sparsity()
     overlap_mat = np.zeros((num_signals, num_signals))
     mask = np.array([])
-    # mask_info = []
     params_list = []
     for i in range(num_signals):
-        mask_info = []
+        eq_info = []
         for j in range(num_signals):
             overlap_vec, num_overlaps, overlap_ratio = signals[i].overlap(signals[j].sparse_vec)
             overlap_mat[i][j] = overlap_ratio
@@ -318,17 +352,20 @@ def mask_chunks(paths, window_size, hop_length, seconds, rank_threshold, max_n, 
             else:
                 mask_ij = 0
         top_m = np.argsort(mask)[-max_n:]
-        # print(mask[top_m])
         top_m_max = mask[top_m].max()
-        # print(top_m_max)
         idx = np.unravel_index(top_m, mask.shape)[0]
         for x in idx:
             freq_bin = (x % num_bins) * (sr / num_bins)
             mask_val = mask[x]
             if (mask_val) > 0 and (freq_bin <= 20000) and (freq_bin >= 20):
                 mask_val_scaled = (mask_val / top_m_max) * max_eq
-                mask_info.append([freq_bin, mask_val_scaled])
-        params_list.append({signals[i].path: mask_info})
+                eq_type = 0
+                eq_info.append([freq_bin, mask_val_scaled, eq_type])
+        rolloff = signals[i].compute_rolloff()
+        energy_percent = signals[i].compute_energy_percent()
+        eq_info.append([rolloff, 0.71, 2])
+        eq.info.append(energy_percent, 0.71, 1)
+        params_list.append({signals[i].path: eq_info})
     return params_list
 
 def mask_2d(signals, rank_threshold, window_size, hop_length, sr, top_n):
@@ -399,6 +436,12 @@ def ratio(wp, wf):return 0.54*wp + 0.764*wf + 1
 
 def release(release_max, crest_factor_n2):
     return (2*release_max) / crest_factor_n2
+
+def rms_normalization(x, R):
+    """Calculate scalar for signal on a linear scale"""
+    n = x.shape[0]
+    a = np.sqrt((n * R**2) / np.sum(x**2))
+    return a
 
 def rms_squared(audio_signal, time_constant, sr):
     alpha = forget_factor(time_constant, sr)
