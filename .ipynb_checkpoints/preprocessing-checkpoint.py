@@ -18,7 +18,7 @@ class Signal:
                                             win_length=self.window_size, hop_length=self.hop_length))
         self.freq_bins = self.fft.shape[0]
         self.fft_db = librosa.amplitude_to_db(self.fft)
-        self.R = R
+        self.R = librosa.db_to_amplitude(R)
         self.bins = bins
         self.freqs = np.array([i * self.sr / self.fft.shape[0] for i in range(self.fft.shape[0])])
         self.roll_percent = roll_percent
@@ -26,18 +26,18 @@ class Signal:
     def compute_energy_percent(self):
         total_energy = np.sum(self.chunk_fft)
         energy_percents = []
-        for i in range(len(bins)-1):
+        for i in range(len(self.bins)-1):
             arr = np.argwhere((self.freqs >= self.bins[i]) & (self.freqs < self.bins[i+1])).flatten()
             bin_sum = np.sum([self.chunk_fft[i] for i in arr])
             energy_percent = bin_sum / total_energy
             energy_percents.append(energy_percent)
         if energy_percents[0] < 0.2:
-            return self.bins[0]
+            return self.bins[1]
 
     def compute_rolloff(self):
         rolloffs = librosa.feature.spectral_rolloff(self.signal, sr=self.sr, n_fft=self.n_fft, hop_length=self.hop_length, 
                              win_length=self.window_size, roll_percent=self.roll_percent)
-        r_active = rolloffs[0, np.argwhere(b > 0).flatten()]
+        r_active = rolloffs[0, np.argwhere(rolloffs > 0).flatten()]
         r_avg = np.mean(r_active)
         return r_avg
         
@@ -322,8 +322,8 @@ def mask(signal_a, signals, rank_threshold, window_size, hop_length, sr, max_n):
             mask_info.append([freq_bin, mask_val])
     return np.array(mask_info)
 
-def eq_chunks(paths, window_size, hop_length, seconds, R, bins, roll_percent, rank_threshold, max_n, min_overlap_ratio, max_eq):
-    signals = [Signal(path=path, window_size=window_size, hop_length=hop_length, R=R, bins=bins, roll_percent=roll_percent) for path in paths]
+def eq_chunks(paths, n_fft, window_size, hop_length, seconds, R, bins, roll_percent, rank_threshold, max_n, min_overlap_ratio, max_eq):
+    signals = [Signal(path=path, n_fft=n_fft, window_size=window_size, hop_length=hop_length, R=R, bins=bins, roll_percent=roll_percent) for path in paths]
     num_signals = len(signals)
     sr = signals[0].sr
     num_bins = signals[0].freq_bins
@@ -333,9 +333,9 @@ def eq_chunks(paths, window_size, hop_length, seconds, R, bins, roll_percent, ra
         sig.set_rank_2d()
         sig.set_sparsity()
     overlap_mat = np.zeros((num_signals, num_signals))
-    mask = np.array([])
     params_list = []
     for i in range(num_signals):
+        mask = np.empty(shape=[0, 2])
         eq_info = []
         for j in range(num_signals):
             overlap_vec, num_overlaps, overlap_ratio = signals[i].overlap(signals[j].sparse_vec)
@@ -348,15 +348,21 @@ def eq_chunks(paths, window_size, hop_length, seconds, R, bins, roll_percent, ra
                 masker_vec_i = signals[i].masker_rank_vec(r_soa_vec_i)
                 maskee_vec_j = signals[j].maskee_rank_vec(r_soa_vec_j)
                 mask_ij = ((masker_vec_i * maskee_vec_j) * (soa_vec_i - soa_vec_j)).flatten()
-                mask = np.append(mask, mask_ij)
+                m_f = np.concatenate((mask_ij[:, np.newaxis], signals[i].freqs[:, np.newaxis]), axis=1)
+                mask = np.append(mask, m_f, axis=0)
             else:
                 mask_ij = 0
-        top_m = np.argsort(mask)[-max_n:]
-        top_m_max = mask[top_m].max()
-        idx = np.unravel_index(top_m, mask.shape)[0]
+        mask_m = np.zeros(num_bins)
+        for b in range(num_bins):
+            arr = mask[b::num_bins, :]
+            max_b, _ = np.max(arr, axis=0)
+            mask_m[b] = max_b
+        top_m = np.argsort(mask_m)[-max_n:]
+        top_m_max = mask_m[top_m].max()
+        idx = np.unravel_index(top_m, mask_m.shape)[0]
         for x in idx:
-            freq_bin = (x % num_bins) * (sr / num_bins)
-            mask_val = mask[x]
+            freq_bin = x  * (sr / num_bins)
+            mask_val = mask_m[x]
             if (mask_val) > 0 and (freq_bin <= 20000) and (freq_bin >= 20):
                 mask_val_scaled = (mask_val / top_m_max) * max_eq
                 eq_type = 0
@@ -364,7 +370,8 @@ def eq_chunks(paths, window_size, hop_length, seconds, R, bins, roll_percent, ra
         rolloff = signals[i].compute_rolloff()
         energy_percent = signals[i].compute_energy_percent()
         eq_info.append([rolloff, 0.71, 2])
-        eq.info.append(energy_percent, 0.71, 1)
+        if energy_percent is not None:
+            eq_info.append([energy_percent, 0.71, 1])
         params_list.append({signals[i].path: eq_info})
     return params_list
 
