@@ -11,8 +11,9 @@ def EQ_signal(params, Q):
         for param in eq_params:
             freq = float(param[0])
             gain = float(param[1])
-            out = EQ(out, freq=freq, q=Q, boost=-gain, type=0)
-    return out
+            eq_type = int(param[2])
+            eq = EQ(out, freq=freq, q=Q, boost=-gain, type=eq_type)
+    return eq
 
 def mix_signals(params_list, Q, filename):
     s = Server(audio='offline').boot()
