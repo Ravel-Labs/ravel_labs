@@ -112,7 +112,67 @@ class EQSignal(Signal):
 
 
 class CompressSignal(Signal):
-    pass
+    def __init__(self, path, signal, n_fft, window_size, hop_length, R, 
+                time_constant, order, cutoff, std, attack_max, release_max):
+    super().__init__(path, signal, n_fft, window_size, hop_length, R)
+    self.time_constant = time_constant
+    self.order = order
+    self.cutoff = cutoff
+    self.std = std
+    self.attack_max = attack_max
+    self.release_max = release_max
+    self.crest_factor = preprocessing.cf(self.signal)
+    self.rms = librosa.feature.rms(signal, frame_length=1024, hop_length=512)
+    self.rms_db = np.mean(librosa.amplitude_to_db(self.rms))
+    
+    def compute_wp(self, cf_avg):
+        return preprocessing.wp(self.crest_factor, cf_avg, self.std)
+
+    def compute_lf_weighting(self, lfa):
+        return preprocessing.lf_weighting(self.signal, lf_avg, self.order, self.cutoff, self.sr)
+
+    def ratio(self, wf, wp): return float(0.54*wp + 0.764*wf + 1)
+
+    def threshold(self, wp):return float(-11.03 + 0.44*self.rms_db - 4.897*wp)
+
+    def knee_width(self, threshold): return abs(threshold) / 2
+
+    def attack(self):
+        return float((2*self.attack_max) / self.crest_factor ** 2)
+
+    def release(self):
+        return float((2*self.release_max) / self.crest_factor ** 2)
+
+    def comp_params(self, cfa, lfa):
+        w_p, cf = self.compute_wp(cfa)
+        w_f = self.compute_lf_weighting(lfa)
+        rms = librosa.feature.rms(signal, frame_length=1024, hop_length=512)
+        r = self.ratio(wf, wp)
+        t = self.threshold(wp)
+        kw = self.knee_width(t)
+        a = self.attack()
+        rel = self.release()
+        return [t, r, a, rel, kw]
+
+    def compression(self, params):
+        s = Server.boot()
+        c = Converter(self.signal)
+        out = c.numpy_to_pyo(s)
+        # out = SfPlayer(full_file_path)
+        out = Compress(out, thresh=params[0], ratio=params[1], risetime=params[2], falltime=params[3], knee=0.4).out()
+        numpy_out = c.pyo_to_numpy(out, s)
+
+
+        outp, rate = sf.read(numpy_out)
+        inp, _ = sf.read(file)
+        meter = pyln.Meter(rate)
+        out_l = meter.integrated_loudness(outp)
+        inp_l = meter.integrated_loudness(inp)
+        makeup_gain = inp_l - out_l
+        compressed_signal = AudioSegment.from_wav(file)
+        compressed_signal = compressed_signal + makeup_gain
+        compressed_signal.export(filename, format="wav")
+
 
 
 class Converter:

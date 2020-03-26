@@ -469,14 +469,15 @@ def spectral_flux(fft_signal):
 
 def threshold(rms, wp):return -11.03 + 0.44*rms - 4.897*wp
 
-def wp(signal, cf_avg, std):
-    cfs = cf(signal)
-    gaussian = ((cfs - cf_avg)**2) / (2*(std**2))
-    if cfs <= cf_avg:
+def wp(cf, cf_avg, std):
+    # cfs = cf(signal)
+    gaussian = ((cf - cf_avg)**2) / (2*(std**2))
+    if cf <= cf_avg:
         wp = np.exp(gaussian)
     else:
         wp = 2 - np.exp(gaussian)
-    return wp, cfs
+    # return wp, cfs
+    return wp
 
 def cf(signal):
     rms = librosa.feature.rms(signal, frame_length=1024, hop_length=512)
