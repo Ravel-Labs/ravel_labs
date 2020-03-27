@@ -163,15 +163,41 @@ class CompressSignal(Signal):
         numpy_out = c.pyo_to_numpy(out, s)
 
 
-        outp, rate = sf.read(numpy_out)
-        inp, _ = sf.read(file)
-        meter = pyln.Meter(rate)
-        out_l = meter.integrated_loudness(outp)
-        inp_l = meter.integrated_loudness(inp)
+        # outp, rate = sf.read(numpy_out)
+        # inp, _ = sf.read(file)
+        meter = pyln.Meter(self.sr)
+        out_l = meter.integrated_loudness(numpy_out)
+        inp_l = meter.integrated_loudness(self.signal)
         makeup_gain = inp_l - out_l
         compressed_signal = AudioSegment.from_wav(file)
         compressed_signal = compressed_signal + makeup_gain
         compressed_signal.export(filename, format="wav")
+
+class PanSignal(Signal):
+    def __init__(self, path, signal, n_fft, window_size, hop_length, R, 
+                cutoffs, window, order, btype)
+    super().__init__(path, signal, n_fft, window_size, hop_length, R)
+    self.window = window
+    self.order = order
+    self.btype = btype
+    self.cutoffs = cutoffs
+    self.window_step = int(self.sr * self.window)
+    self.num_steps = int(self.signal.shape[0] / self.window_step)
+    self.K = len(cutoffs)
+
+
+    def lead_filter(self): 
+        return peak_filter_bank(self.signal, self.cutoffs, 
+                                self.sr, self.order, self.btype, 
+                                self.window_step, self.num_steps)
+
+    def pan(self, P):
+        s = Server.boot()
+        c = Converter(self.signal)
+        out = c.numpy_to_pyo(s)
+        out = Pan(out, pan=P).out()
+        numpy_out = c.pyo_to_numpy(out, s)
+        return numpy_out
 
 
 
@@ -247,6 +273,50 @@ def sparse_overlap_avg(num_bins, chunk_fft_db, sparse_vec, overlap_vec, num_over
     for i in range(num_bins):
         soa_vec[i] = np.sum((chunk_fft_db[i] * sparse_vec) * overlap_vec) / num_overlaps
     return soa_vec
+
+def peak_filter(signal, cutoff, sr, order, btype, window_step, num_steps):
+    y = apply_bfilter(signal, cutoff, sr, order, btype)
+    window_step = int(sr * window)
+    num_steps = int(signal.shape[0] / window_step)
+    peaks = np.zeros(num_steps)
+    for i in range(num_steps):
+        y_window = y[i*window_step:(i+1)*window_step]
+        peak = y_window.max()
+        peaks[i] = peak
+    return peaks
+
+def peak_filter_bank(signal, cutoffs, sr, order, btype, window_step, num_steps):
+    num_cutoffs = len(cutoffs)
+    peaks = np.zeros((num_cutoffs, num_steps))
+    for i in range(num_cutoffs):
+        peaks[i] = peak_filter(signal, cutoffs[i], sr, order, btype, window_step, num_steps)
+    maxs = np.argmax(peaks, axis=0)
+    freq_counts = np.unique(maxs, return_counts=True)
+    max_idx = np.argmax(freq_counts[:][1])
+    return cutoffs[max_idx]
+
+def panning_locations(filter_freqs, signal_peaks):
+    '''Method used for the signal aggregator'''
+    num_freqs = len(filter_freqs)
+    N_ks = np.unique(signal_peaks, return_inverse=True, return_counts=True)
+    Ps = []
+    for k in range(num_freqs):   
+        N_k = N_ks[k][1]
+        P = np.zeros(N_k, k)
+        for i in range(N_k):
+            if N_k == 1:
+                P[i][k] = 1/2
+            if N_k + i % 2 != 0:
+                P[i][k] = (N_k - i - 1) / (2 * (N_k - i))
+            if (N_k + i % 2 == 0) and (N_k != 1):
+                P[i][k] = 1 - ((N_k - i) / (2 * (N_k -1)))
+            idx = np.argwhere(signal_peaks == k)[i]
+            Ps.append(idx, P[i][k])
+    return Ps
+
+
+
+
 
 def rank_soa_vec(soa_vec): return np.abs(rankdata(soa_vec, method='min') - (soa_vec.shape[0])) + 1
 

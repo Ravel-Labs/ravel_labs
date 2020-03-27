@@ -3,6 +3,7 @@ import librosa
 import numpy as np
 import pyloudnorm as pyln
 import scipy
+from scipy.signal import butter, lfilter, freqz
 from scipy.fftpack import fft
 from scipy.stats import rankdata
 
@@ -121,6 +122,12 @@ def audio_sparsity(r_y, min_y):
         else:
             sparse_vec[0, i] = 1
     return sparse_vec
+
+def butter_filter(cutoff, sr, order, btype):
+    nyq = 0.5 * sr
+    normal_cutoff = cutoff / nyq
+    b, a = butter(order, normal_cutoff, btype=btype, analog=False)
+    return b, a
 
 def butter_bandpass(lowcut, highcut, fs, order):
     nyq = 0.5 * fs
@@ -322,58 +329,58 @@ def mask(signal_a, signals, rank_threshold, window_size, hop_length, sr, max_n):
             mask_info.append([freq_bin, mask_val])
     return np.array(mask_info)
 
-def eq_chunks(paths, n_fft, window_size, hop_length, seconds, R, bins, roll_percent, rank_threshold, max_n, min_overlap_ratio, max_eq):
-    signals = [Signal(path=path, n_fft=n_fft, window_size=window_size, hop_length=hop_length, R=R, bins=bins, roll_percent=roll_percent) for path in paths]
-    num_signals = len(signals)
-    sr = signals[0].sr
-    num_bins = signals[0].freq_bins
-    for sig in signals:
-        sig.set_norm_db()
-        sig.set_chunk(seconds=seconds)
-        sig.set_rank_2d()
-        sig.set_sparsity()
-    overlap_mat = np.zeros((num_signals, num_signals))
-    params_list = []
-    for i in range(num_signals):
-        mask = np.empty(shape=[0, 2])
-        eq_info = []
-        for j in range(num_signals):
-            overlap_vec, num_overlaps, overlap_ratio = signals[i].overlap(signals[j].sparse_vec)
-            overlap_mat[i][j] = overlap_ratio
-            if (overlap_ratio > min_overlap_ratio) and (i != j):
-                soa_vec_i = signals[i].sparse_overlap_avg(overlap_vec, num_overlaps)
-                soa_vec_j = signals[j].sparse_overlap_avg(overlap_vec, num_overlaps)
-                r_soa_vec_i = signals[i].rank_soa_vec(soa_vec_i)
-                r_soa_vec_j = signals[j].rank_soa_vec(soa_vec_j)
-                masker_vec_i = signals[i].masker_rank_vec(r_soa_vec_i)
-                maskee_vec_j = signals[j].maskee_rank_vec(r_soa_vec_j)
-                mask_ij = ((masker_vec_i * maskee_vec_j) * (soa_vec_i - soa_vec_j)).flatten()
-                m_f = np.concatenate((mask_ij[:, np.newaxis], signals[i].freqs[:, np.newaxis]), axis=1)
-                mask = np.append(mask, m_f, axis=0)
-            else:
-                mask_ij = 0
-        mask_m = np.zeros(num_bins)
-        for b in range(num_bins):
-            arr = mask[b::num_bins, :]
-            max_b, _ = np.max(arr, axis=0)
-            mask_m[b] = max_b
-        top_m = np.argsort(mask_m)[-max_n:]
-        top_m_max = mask_m[top_m].max()
-        idx = np.unravel_index(top_m, mask_m.shape)[0]
-        for x in idx:
-            freq_bin = x  * (sr / num_bins)
-            mask_val = mask_m[x]
-            if (mask_val) > 0 and (freq_bin <= 20000) and (freq_bin >= 20):
-                mask_val_scaled = (mask_val / top_m_max) * max_eq
-                eq_type = 0
-                eq_info.append([freq_bin, mask_val_scaled, eq_type])
-        rolloff = signals[i].compute_rolloff()
-        energy_percent = signals[i].compute_energy_percent()
-        eq_info.append([rolloff, 0.71, 2])
-        if energy_percent is not None:
-            eq_info.append([energy_percent, 0.71, 1])
-        params_list.append({signals[i].path: eq_info})
-    return params_list
+# def eq_chunks(paths, n_fft, window_size, hop_length, seconds, R, bins, roll_percent, rank_threshold, max_n, min_overlap_ratio, max_eq):
+#     signals = [Signal(path=path, n_fft=n_fft, window_size=window_size, hop_length=hop_length, R=R, bins=bins, roll_percent=roll_percent) for path in paths]
+#     num_signals = len(signals)
+#     sr = signals[0].sr
+#     num_bins = signals[0].freq_bins
+#     for sig in signals:
+#         sig.set_norm_db()
+#         sig.set_chunk(seconds=seconds)
+#         sig.set_rank_2d()
+#         sig.set_sparsity()
+#     overlap_mat = np.zeros((num_signals, num_signals))
+#     params_list = []
+#     for i in range(num_signals):
+#         mask = np.empty(shape=[0, 2])
+#         eq_info = []
+#         for j in range(num_signals):
+#             overlap_vec, num_overlaps, overlap_ratio = signals[i].overlap(signals[j].sparse_vec)
+#             overlap_mat[i][j] = overlap_ratio
+#             if (overlap_ratio > min_overlap_ratio) and (i != j):
+#                 soa_vec_i = signals[i].sparse_overlap_avg(overlap_vec, num_overlaps)
+#                 soa_vec_j = signals[j].sparse_overlap_avg(overlap_vec, num_overlaps)
+#                 r_soa_vec_i = signals[i].rank_soa_vec(soa_vec_i)
+#                 r_soa_vec_j = signals[j].rank_soa_vec(soa_vec_j)
+#                 masker_vec_i = signals[i].masker_rank_vec(r_soa_vec_i)
+#                 maskee_vec_j = signals[j].maskee_rank_vec(r_soa_vec_j)
+#                 mask_ij = ((masker_vec_i * maskee_vec_j) * (soa_vec_i - soa_vec_j)).flatten()
+#                 m_f = np.concatenate((mask_ij[:, np.newaxis], signals[i].freqs[:, np.newaxis]), axis=1)
+#                 mask = np.append(mask, m_f, axis=0)
+#             else:
+#                 mask_ij = 0
+#         mask_m = np.zeros(num_bins)
+#         for b in range(num_bins):
+#             arr = mask[b::num_bins, :]
+#             max_b, _ = np.max(arr, axis=0)
+#             mask_m[b] = max_b
+#         top_m = np.argsort(mask_m)[-max_n:]
+#         top_m_max = mask_m[top_m].max()
+#         idx = np.unravel_index(top_m, mask_m.shape)[0]
+#         for x in idx:
+#             freq_bin = x  * (sr / num_bins)
+#             mask_val = mask_m[x]
+#             if (mask_val) > 0 and (freq_bin <= 20000) and (freq_bin >= 20):
+#                 mask_val_scaled = (mask_val / top_m_max) * max_eq
+#                 eq_type = 0
+#                 eq_info.append([freq_bin, mask_val_scaled, eq_type])
+#         rolloff = signals[i].compute_rolloff()
+#         energy_percent = signals[i].compute_energy_percent()
+#         eq_info.append([rolloff, 0.71, 2])
+#         if energy_percent is not None:
+#             eq_info.append([energy_percent, 0.71, 1])
+#         params_list.append({signals[i].path: eq_info})
+#     return params_list
 
 def mask_2d(signals, rank_threshold, window_size, hop_length, sr, top_n):
     '''
