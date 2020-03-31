@@ -1,4 +1,6 @@
+import preprocessing
 from pyo import *
+from pysndfx import AudioEffectsChain
 
 class Signal:
     def __init__(self, path, signal, n_fft, window_size, hop_length, R):
@@ -93,7 +95,6 @@ class EQSignal(Signal):
         eq_info.append([rolloff, 0.71, 2])
         if energy_percent is not None:
             eq_info.append([energy_percent, 0.71, 1])
-        # params_list.append({signals[i].path: eq_info})
         return eq_info
 
     def equalization(self, eq_info, Q):
@@ -121,15 +122,15 @@ class CompressSignal(Signal):
     self.std = std
     self.attack_max = attack_max
     self.release_max = release_max
-    self.crest_factor = preprocessing.cf(self.signal)
-    self.rms = librosa.feature.rms(signal, frame_length=1024, hop_length=512)
+    self.rms = librosa.feature.rms(signal, frame_length=self.window_size, hop_length=self.hop_length)
     self.rms_db = np.mean(librosa.amplitude_to_db(self.rms))
+    self.peak_db = librosa.amplitude_to_db(np.sum(self.fft, axis=0)).max()
+    self.crest_factor = self.peak_db / rms_db
+    self.lfe = preprocessing.compute_lfe(self.signal, self.order, self.cutoff, self.sr)
     
-    def compute_wp(self, cf_avg):
-        return preprocessing.wp(self.crest_factor, cf_avg, self.std)
+    def compute_wp(self, cf_avg): return preprocessing.wp(self.crest_factor, cf_avg, self.std)
 
-    def compute_lf_weighting(self, lfa):
-        return preprocessing.lf_weighting(self.signal, lf_avg, self.order, self.cutoff, self.sr)
+    def compute_lf_weighting(self, lfa): return self.lfe / lfa
 
     def ratio(self, wf, wp): return float(0.54*wp + 0.764*wf + 1)
 
@@ -137,11 +138,9 @@ class CompressSignal(Signal):
 
     def knee_width(self, threshold): return abs(threshold) / 2
 
-    def attack(self):
-        return float((2*self.attack_max) / self.crest_factor ** 2)
+    def attack(self): return float((2*self.attack_max) / self.crest_factor ** 2)
 
-    def release(self):
-        return float((2*self.release_max) / self.crest_factor ** 2)
+    def release(self): return float((2*self.release_max) / self.crest_factor ** 2)
 
     def comp_params(self, cfa, lfa):
         w_p, cf = self.compute_wp(cfa)
@@ -158,20 +157,11 @@ class CompressSignal(Signal):
         s = Server.boot()
         c = Converter(self.signal)
         out = c.numpy_to_pyo(s)
-        # out = SfPlayer(full_file_path)
         out = Compress(out, thresh=params[0], ratio=params[1], risetime=params[2], falltime=params[3], knee=0.4).out()
         numpy_out = c.pyo_to_numpy(out, s)
-
-
-        # outp, rate = sf.read(numpy_out)
-        # inp, _ = sf.read(file)
-        meter = pyln.Meter(self.sr)
-        out_l = meter.integrated_loudness(numpy_out)
-        inp_l = meter.integrated_loudness(self.signal)
-        makeup_gain = inp_l - out_l
-        compressed_signal = AudioSegment.from_wav(file)
-        compressed_signal = compressed_signal + makeup_gain
-        compressed_signal.export(filename, format="wav")
+        makeup_gain = preprocessing.compute_makeup_gain(self.signal, numpy_out, self.sr)
+        fx = (AudioEffectsChain().gain(makeup_gain))
+        return fx(numpy_out)
 
 class PanSignal(Signal):
     def __init__(self, path, signal, n_fft, window_size, hop_length, R, 
@@ -200,7 +190,6 @@ class PanSignal(Signal):
         return numpy_out
 
 
-
 class Converter:
     def __init__(self, signal):
         self.signal = signal
@@ -224,7 +213,43 @@ class Converter:
 
 class SignalAggregator:
     '''Computes all of the aggregated stats for each effect'''
-    pass
+    def __init__(self, fft_lows, ffts, cfs, filter_freqs)
+        self.fft_lows = fft_lows
+        self.ffts = ffts
+        self.cfs = cfs
+        if len(self.ffts) == len(self.ffts) == len(cfs):
+            self.M = len(self.ffts)
+        else:
+            raise Exception("""cfs, ffts, and fft_lows should have equal length, 
+                            but instead were {}, {}, and {}""".format(len(cfs), len(self.ffts), len(cfs)))
+        self.filter_freqs = filter_freqs
+
+    def lfa(self):
+        l_sum = 0
+        for fft_low, fft in zip(self.fft_lows, self.fft):
+            total = np.sum(np.divide(fft_xlow, fft_x, out=np.zeros_like(fft_xlow), where=fft_x!=0))
+            l_sum += total
+        return l_sum / self.M
+
+    def cfa(self): return sum([cf for cf in self.cfs]) / self.M
+
+    def panning_locations(self, signal_peaks):
+        num_freqs = len(self.filter_freqs)
+        N_ks = np.unique(signal_peaks, return_inverse=True, return_counts=True)
+        Ps = []
+        for k in range(num_freqs):
+            N_k = N_ks[k][1]
+            P = np.zeros(N_k, k)
+            for i in range(N_k):
+                if N_k == 1:
+                    P[i][k] = 1/2
+                if N_k + i % 2 != 0:
+                    P[i][k] = (N_k - i - 1) / (2 * (N_k - i))
+                if (N_k + i % 2 == 0) and (N_k != 1):
+                    P[i][k] = 1 - ((N_k - i) / (2 * (N_k -1)))
+                idx = np.argwhere(signal_peaks == k)[i]
+                Ps.append(idx, P[i][k])
+        return Ps
 
 
 def compute_chunk(norm_fft_db, window_size, sr, seconds):
@@ -313,9 +338,6 @@ def panning_locations(filter_freqs, signal_peaks):
             idx = np.argwhere(signal_peaks == k)[i]
             Ps.append(idx, P[i][k])
     return Ps
-
-
-
 
 
 def rank_soa_vec(soa_vec): return np.abs(rankdata(soa_vec, method='min') - (soa_vec.shape[0])) + 1

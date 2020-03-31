@@ -7,103 +7,6 @@ from scipy.signal import butter, lfilter, freqz
 from scipy.fftpack import fft
 from scipy.stats import rankdata
 
-class Signal:
-    def __init__(self, path, n_fft, window_size, hop_length, R, bins, roll_percent):
-        self.path = path
-        self.sr = librosa.get_samplerate(self.path)
-        self.n_fft = n_fft
-        self.window_size = window_size
-        self.hop_length = hop_length
-        self.signal, _ = librosa.load(self.path, sr=self.sr)
-        self.fft = np.abs(librosa.core.stft(self.signal, n_fft=self.n_fft, 
-                                            win_length=self.window_size, hop_length=self.hop_length))
-        self.freq_bins = self.fft.shape[0]
-        self.fft_db = librosa.amplitude_to_db(self.fft)
-        self.R = librosa.db_to_amplitude(R)
-        self.bins = bins
-        self.freqs = np.array([i * self.sr / self.fft.shape[0] for i in range(self.fft.shape[0])])
-        self.roll_percent = roll_percent
-
-    def compute_energy_percent(self):
-        total_energy = np.sum(self.chunk_fft)
-        energy_percents = []
-        for i in range(len(self.bins)-1):
-            arr = np.argwhere((self.freqs >= self.bins[i]) & (self.freqs < self.bins[i+1])).flatten()
-            bin_sum = np.sum([self.chunk_fft[i] for i in arr])
-            energy_percent = bin_sum / total_energy
-            energy_percents.append(energy_percent)
-        if energy_percents[0] < 0.2:
-            return self.bins[1]
-
-    def compute_rolloff(self):
-        rolloffs = librosa.feature.spectral_rolloff(self.signal, sr=self.sr, n_fft=self.n_fft, hop_length=self.hop_length, 
-                             win_length=self.window_size, roll_percent=self.roll_percent)
-        r_active = rolloffs[0, np.argwhere(rolloffs > 0).flatten()]
-        r_avg = np.mean(r_active)
-        return r_avg
-        
-    def set_norm_db(self):
-        """Calculate scalar for signal on a linear scale"""
-        x = self.signal
-        n = x.shape[0]
-        a = np.sqrt((n * self.R**2) / np.sum(x**2))
-        x_norm_db = librosa.amplitude_to_db(a * x)
-        self.norm_fft_db = np.abs(librosa.core.stft(x_norm_db, n_fft=self.n_fft, 
-                                            win_length=self.window_size, hop_length=self.hop_length))
-    
-    def set_chunk(self, seconds):
-        fft_length = self.norm_fft_db.shape[1]
-        num_freqs = self.norm_fft_db.shape[0]
-        chunk_size = int(np.ceil((1 / (self.window_size / self.sr)) * seconds))
-        total_chunks = int(np.ceil(fft_length / chunk_size))
-        avg_mat = np.zeros((num_freqs, total_chunks))
-        avg_vec = np.zeros((1, chunk_size))
-        for i in range(num_freqs):
-            for j in range(total_chunks):
-                if j > total_chunks - 1:
-                    avg_vec = self.norm_fft_db[i][chunk_size * j:]
-                    mu = np.mean(avg_vec)
-                    avg_mat[i][j] = mu
-                avg_vec = self.norm_fft_db[i][chunk_size * j: chunk_size * (j+1)]
-                mu = np.mean(avg_vec)
-                avg_mat[i][j] = mu
-        self.chunk_fft = avg_mat
-
-    def set_rank_2d(self): 
-        a = np.zeros(self.chunk_fft.shape)
-        for row in range(self.chunk_fft.shape[1]):
-            a[:, row] = np.abs(rankdata(self.chunk_fft[:, row], method='min') - (self.chunk_fft.shape[0])) + 1
-        self.rank = a
-
-    def set_sparsity(self):
-        sparse_vec = np.zeros((1, self.rank.shape[1]))
-        min_val = self.freq_bins
-        for i in range(self.rank.shape[1]):
-            mu = np.mean(self.rank.T[i])
-            if mu == min_val:
-                sparse_vec[0, i] = 0
-            else:
-                sparse_vec[0, i] = 1
-        self.sparse_vec = sparse_vec
-
-    def overlap(self, sv1):
-        overlap_vec = self.sparse_vec * sv1
-        num_overlaps = np.sum(overlap_vec)
-        overlap_ratio = num_overlaps / overlap_vec.shape[1]
-        return overlap_vec, num_overlaps, overlap_ratio
-
-    def sparse_overlap_avg(self, overlap_vec, num_overlaps):
-        soa_vec = np.zeros((self.freq_bins, 1))
-        for i in range(self.freq_bins):
-            soa_vec[i] = np.sum((self.chunk_fft[i] * self.sparse_vec) * overlap_vec) / num_overlaps
-        return soa_vec
-
-    def rank_soa_vec(self, soa_vec): return np.abs(rankdata(soa_vec, method='min') - (soa_vec.shape[0])) + 1
-
-    def masker_rank_vec(self, r_soa_vec): return np.expand_dims(np.where(r_soa_vec > 10, 1, 0), axis=1)
-
-    def maskee_rank_vec(self, r_soa_vec): return np.expand_dims(np.where(r_soa_vec <= 10, 1, 0), axis=1)
-
 
 def apply_bfilter(signal, cutoff, sr, order, btype):
     b, a = butter_filter(cutoff, sr, order, btype)
@@ -266,13 +169,12 @@ def lf_avg(signals, order, cutoff, sr):
         sum += total
     return sum / 4
 
-def lf_weighting(signal, lf_avg, order, cutoff, sr):
+def compute_lfe(signal, order, cutoff, sr):
     lf_x = low_pass(signal, order, cutoff, sr)
     x_low = np.abs(librosa.core.stft(lf_x, n_fft=1024, hop_length=512))
     x = np.abs(librosa.core.stft(signal, n_fft=1024, hop_length=512))
     lfe = np.sum(np.divide(x_low, x, out=np.zeros_like(x_low), where=x!=0))
-#     lfe = np.sum(x_low / x)
-    return lfe / lf_avg
+    return lfe  
 
 def low_pass(signal, order, cutoff, sr):
     nyq = sr * 0.5
@@ -281,7 +183,7 @@ def low_pass(signal, order, cutoff, sr):
     y = scipy.signal.lfilter(b, a, signal)
     return y
 
-def makeup_gain(x_in, x_out, rate):
+def compute_makeup_gain(x_in, x_out, rate):
     meter = pyln.Meter(rate)
     loudness_in = meter.integrated_loudness(x_in)
     loudness_out = meter.integrated_loudness(x_out)
@@ -328,59 +230,6 @@ def mask(signal_a, signals, rank_threshold, window_size, hop_length, sr, max_n):
         if (mask_val) > 0 and (freq_bin <= 20000) and (freq_bin >= 20):
             mask_info.append([freq_bin, mask_val])
     return np.array(mask_info)
-
-# def eq_chunks(paths, n_fft, window_size, hop_length, seconds, R, bins, roll_percent, rank_threshold, max_n, min_overlap_ratio, max_eq):
-#     signals = [Signal(path=path, n_fft=n_fft, window_size=window_size, hop_length=hop_length, R=R, bins=bins, roll_percent=roll_percent) for path in paths]
-#     num_signals = len(signals)
-#     sr = signals[0].sr
-#     num_bins = signals[0].freq_bins
-#     for sig in signals:
-#         sig.set_norm_db()
-#         sig.set_chunk(seconds=seconds)
-#         sig.set_rank_2d()
-#         sig.set_sparsity()
-#     overlap_mat = np.zeros((num_signals, num_signals))
-#     params_list = []
-#     for i in range(num_signals):
-#         mask = np.empty(shape=[0, 2])
-#         eq_info = []
-#         for j in range(num_signals):
-#             overlap_vec, num_overlaps, overlap_ratio = signals[i].overlap(signals[j].sparse_vec)
-#             overlap_mat[i][j] = overlap_ratio
-#             if (overlap_ratio > min_overlap_ratio) and (i != j):
-#                 soa_vec_i = signals[i].sparse_overlap_avg(overlap_vec, num_overlaps)
-#                 soa_vec_j = signals[j].sparse_overlap_avg(overlap_vec, num_overlaps)
-#                 r_soa_vec_i = signals[i].rank_soa_vec(soa_vec_i)
-#                 r_soa_vec_j = signals[j].rank_soa_vec(soa_vec_j)
-#                 masker_vec_i = signals[i].masker_rank_vec(r_soa_vec_i)
-#                 maskee_vec_j = signals[j].maskee_rank_vec(r_soa_vec_j)
-#                 mask_ij = ((masker_vec_i * maskee_vec_j) * (soa_vec_i - soa_vec_j)).flatten()
-#                 m_f = np.concatenate((mask_ij[:, np.newaxis], signals[i].freqs[:, np.newaxis]), axis=1)
-#                 mask = np.append(mask, m_f, axis=0)
-#             else:
-#                 mask_ij = 0
-#         mask_m = np.zeros(num_bins)
-#         for b in range(num_bins):
-#             arr = mask[b::num_bins, :]
-#             max_b, _ = np.max(arr, axis=0)
-#             mask_m[b] = max_b
-#         top_m = np.argsort(mask_m)[-max_n:]
-#         top_m_max = mask_m[top_m].max()
-#         idx = np.unravel_index(top_m, mask_m.shape)[0]
-#         for x in idx:
-#             freq_bin = x  * (sr / num_bins)
-#             mask_val = mask_m[x]
-#             if (mask_val) > 0 and (freq_bin <= 20000) and (freq_bin >= 20):
-#                 mask_val_scaled = (mask_val / top_m_max) * max_eq
-#                 eq_type = 0
-#                 eq_info.append([freq_bin, mask_val_scaled, eq_type])
-#         rolloff = signals[i].compute_rolloff()
-#         energy_percent = signals[i].compute_energy_percent()
-#         eq_info.append([rolloff, 0.71, 2])
-#         if energy_percent is not None:
-#             eq_info.append([energy_percent, 0.71, 1])
-#         params_list.append({signals[i].path: eq_info})
-#     return params_list
 
 def mask_2d(signals, rank_threshold, window_size, hop_length, sr, top_n):
     '''
@@ -483,13 +332,4 @@ def wp(cf, cf_avg, std):
         wp = np.exp(gaussian)
     else:
         wp = 2 - np.exp(gaussian)
-    # return wp, cfs
     return wp
-
-def cf(signal):
-    rms = librosa.feature.rms(signal, frame_length=1024, hop_length=512)
-    rms_db = np.mean(librosa.amplitude_to_db(rms))
-    D = np.abs(librosa.core.stft(signal, n_fft=1024, hop_length=512))
-    peak_db = librosa.amplitude_to_db(np.sum(D, axis=0)).max()
-    cf = peak_db / rms_db
-    return cf
