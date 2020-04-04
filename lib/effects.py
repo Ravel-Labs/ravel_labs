@@ -283,26 +283,22 @@ class SignalAggregator:
     def cfa(self, cfs): return sum([cf for cf in cfs]) / self.M
 
     def panning_locations(self, filter_freqs, signal_peaks):
-        # num_freqs = len(filter_freqs)
         N_ks = np.unique(signal_peaks, return_inverse=True, return_counts=True)
         num_k = N_ks[0].shape[0]
         Ps = []
         for k in np.arange(num_k):
-            # N_k = N_ks[k][1]
             freq = N_ks[0][k]
             N_k = N_ks[2][k]
-            print(k, N_k)
-            P = np.zeros((N_k, 1))
+            P = np.zeros((N_k))
             for i in np.arange(N_k):
-                print(i)
                 if N_k == 1:
-                    P[i][k] = 1/2
-                if N_k + i % 2 != 0:
-                    P[i][k] = (N_k - i - 1) / (2 * (N_k - i))
-                if (N_k + i % 2 == 0) and (N_k != 1):
+                    P[i] = 1/2
+                elif N_k + i % 2 != 0:
+                    P[i] = (N_k - i - 1) / (2 * (N_k - i))
+                elif (N_k + i % 2 == 0) and (N_k != 1):
                     P[i][k] = 1 - ((N_k - i) / (2 * (N_k -1)))
                 idx = np.argwhere(signal_peaks == freq)[0][i]
-                Ps.append([idx, P[i][k]])
+                Ps.append([idx, P[i]])
         return Ps
 
     def loudness_avg(self, channels, decay, holdtime, ltrhold, utrhold, release, attack):
