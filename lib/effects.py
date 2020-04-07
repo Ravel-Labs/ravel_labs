@@ -120,7 +120,8 @@ class EQSignal(Signal):
             freq = float(eq_info[i][0])
             gain = float(eq_info[i][1])
             eq_type = int(eq_info[i][2])
-            out = EQ(out, freq=freq, q=Q, boost=-gain, type=eq_type)
+            eq = EQ(out, freq=freq, q=Q, boost=-gain, type=eq_type)
+            out = eq
         out = out.out()
         numpy_out = c.pyo_to_numpy(out, s)
         return numpy_out
@@ -232,8 +233,8 @@ class PanSignal(Signal):
         s = Server().boot()
         c = Converter(self.signal)
         out = c.numpy_to_pyo(s)
-        out = Pan(out, pan=P).out()
-        numpy_out = c.pyo_to_numpy(out, s)
+        pan_out = Pan(out, pan=P).out()
+        numpy_out = c.pyo_to_numpy(pan_out, s)
         return numpy_out
 
 
@@ -247,7 +248,7 @@ class Converter:
         t = DataTable(size=self.buffer_size)
         osc = TableRead(t, freq=t.getRate(), loop=True, mul=0.1).out()
         arr = np.asarray(t.getBuffer())
-        pyo_x = process(arr, self.signal, osc)
+        pyo_x = process(t, self.signal, osc)
         return pyo_x
 
     def pyo_to_numpy(self, out, s):
@@ -312,10 +313,11 @@ class SignalAggregator:
         return L_av
 
 
-def process(arr, x, osc):
+def process(t, x, osc):
     "Fill the array (so the table) with white noise."
+    arr = np.asarray(t.getBuffer())
     arr[:] = x
-    return osc
+    return osc.out()
 
 def done(t):
     arr = np.asarray(t.getBuffer())
