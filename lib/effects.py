@@ -140,7 +140,7 @@ class CompressSignal(Signal):
         self.rms = librosa.feature.rms(signal, frame_length=self.window_size, hop_length=self.hop_length)
         self.rms_db = np.mean(librosa.amplitude_to_db(self.rms))
         self.peak_db = librosa.amplitude_to_db(np.sum(self.fft, axis=0)).max()
-        self.crest_factor = self.peak_db / rms_db
+        self.crest_factor = self.peak_db / self.rms_db
         self.lfe = preprocessing.compute_lfe(self.signal, self.order, self.cutoff, self.sr)
     
     def compute_wp(self, cf_avg): return preprocessing.wp(self.crest_factor, cf_avg, self.std)
@@ -158,11 +158,10 @@ class CompressSignal(Signal):
     def release(self): return float((2*self.release_max) / self.crest_factor ** 2)
 
     def comp_params(self, cfa, lfa):
-        w_p, cf = self.compute_wp(cfa)
+        w_p = self.compute_wp(cfa)
         w_f = self.compute_lf_weighting(lfa)
-        rms = librosa.feature.rms(signal, frame_length=1024, hop_length=512)
-        r = self.ratio(wf, wp)
-        t = self.threshold(wp)
+        r = self.ratio(w_f, w_p)
+        t = self.threshold(w_p)
         kw = self.knee_width(t)
         a = self.attack()
         rel = self.release()
@@ -188,7 +187,7 @@ class FaderSignal(Signal):
         self.B = B
         self.x_norm = preprocessing.normalize(self.signal_db, self.peak)
     
-    def full_loudness(self, x, decay, step, fs):
+    def full_loudness(self):
         x_norm = self.x_norm
         sr = self.sr
         step = self.step
@@ -209,7 +208,7 @@ class FaderSignal(Signal):
             F_m[n] = F_m[n] * 10 ** (self.B/20)
         return F_m
 
-    def fader(self, fader_output): return self.x_norm * fader_output
+    def fader(self, fader_output): return self.signal * fader_output
 
 class PanSignal(Signal):
     def __init__(self, path, signal, n_fft, window_size, hop_length, peak, 
@@ -262,24 +261,10 @@ class Converter:
 class SignalAggregator:
     '''Computes all of the aggregated stats for each effect'''
     def __init__(self, sr, M):
-        # self.fft_lows = fft_lows
-        # self.ffts = ffts
-        # self.cfs = cfs
         self.sr = sr
         self.M = M
-        # if len(self.ffts) == len(self.ffts) == len(cfs):
-        #     self.M = len(self.ffts)
-        # else:
-        #     raise Exception("""cfs, ffts, and fft_lows should have equal length, 
-        #                     but instead were {}, {}, and {}""".format(len(cfs), len(self.ffts), len(cfs)))
-        # self.filter_freqs = filter_freqs
 
-    def lfa(self, fft_lows, ffts):
-        l_sum = 0
-        for fft_low, fft in zip(fft_lows, ffts):
-            total = np.sum(np.divide(fft_xlow, fft_x, out=np.zeros_like(fft_xlow), where=fft_x!=0))
-            l_sum += total
-        return l_sum / self.M
+    def lfa(self, lfes): return sum([lfe for lfe in lfes]) / self.M
 
     def cfa(self, cfs): return sum([cf for cf in cfs]) / self.M
 
@@ -302,8 +287,8 @@ class SignalAggregator:
                 Ps.append([idx, P[i]])
         return Ps
 
-    def loudness_avg(self, channels, decay, holdtime, ltrhold, utrhold, release, attack):
-        gains = [noise_gate(channels[i], holdtime, ltrhold, utrhold, release, attack, self.sr) 
+    def loudness_avg(self, channels, holdtime, ltrhold, utrhold, release, attack):
+        gains = [preprocessing.noise_gate(channels[i], holdtime, ltrhold, utrhold, release, attack, self.sr) 
                  for i in range(len(channels))]
         gains = [np.where(gain < 1, 0, 1) for gain in gains]
         gain_val = np.array(gains).sum(axis=0)
