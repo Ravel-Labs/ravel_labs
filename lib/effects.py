@@ -111,21 +111,6 @@ class EQSignal(Signal):
             eq_info.append([energy_percent, 0.71, 1])
         return eq_info
 
-    # def equalization(self, eq_info, Q):
-    #     num_filters = len(eq_info)
-    #     s = Server().boot()
-    #     c = Converter(self.signal)
-    #     out = c.numpy_to_pyo(s)
-    #     for i in range(num_filters):
-    #         freq = float(eq_info[i][0])
-    #         gain = float(eq_info[i][1])
-    #         eq_type = int(eq_info[i][2])
-    #         eq = EQ(out, freq=freq, q=Q, boost=-gain, type=eq_type)
-    #         out = eq
-    #     out = out.out()
-    #     numpy_out = c.pyo_to_numpy(out, s)
-    #     return numpy_out
-
     def equalization(self, eq_info, Q):
         num_filters = len(eq_info)
         y = self.signal
@@ -143,7 +128,6 @@ class EQSignal(Signal):
                 eq = AudioEffectsChain().lowpass(freq)
                 y = eq(y)
         return y
-
 
 
 class CompressSignal(Signal):
@@ -186,20 +170,13 @@ class CompressSignal(Signal):
         rel = self.release()
         return [t, r, a, rel, kw]
 
-    # def compression(self, params):
-    #     s = Server().boot()
-    #     c = Converter(self.signal)
-    #     out = c.numpy_to_pyo(s)
-    #     out = Compress(out, thresh=params[0], ratio=params[1], risetime=params[2], falltime=params[3], knee=0.4).out()
-    #     numpy_out = c.pyo_to_numpy(out, s)
-    #     makeup_gain = preprocessing.compute_makeup_gain(self.signal, numpy_out, self.sr)
-    #     fx = (AudioEffectsChain().gain(makeup_gain))
-    #     return fx(numpy_out)
-
     def compression(self, params):
-        compress = AudioEffectsChain.compand(attack=params[2], decay=params[3], soft_knee=params[1], 
+        compress = AudioEffectsChain().compand(attack=params[2], decay=params[3], soft_knee=params[1], 
                     threshold=params[0], db_from=params[0], db_to=params[0])
-        return compress(self.signal)
+        y = compress(self.signal)
+        makeup_gain = preprocessing.compute_makeup_gain(self.signal, y, self.sr)
+        gain = (AudioEffectsChain().gain(makeup_gain))
+        return gain(y)
 
 class FaderSignal(Signal):
     def __init__(self, path, signal, n_fft, window_size, hop_length, peak,
@@ -252,18 +229,11 @@ class PanSignal(Signal):
                                 self.sr, self.order, self.btype, 
                                 self.window_step, self.num_steps)
 
-    # def pan(self, P):
-    #     s = Server().boot()
-    #     c = Converter(self.signal)
-    #     out = c.numpy_to_pyo(s)
-    #     pan_out = Pan(out, pan=P).out()
-    #     numpy_out = c.pyo_to_numpy(pan_out, s)
-    #     return numpy_out
 
     def pan(self, P):
-        right = np.sin(P * np.pi) * self.signal
         left = np.cos(P * np.pi) * self.signal
-        return (right, left)
+        right = np.sin(P * np.pi) * self.signal
+        return np.dstack((left,right))[0]
 
 
 class Converter:
@@ -311,8 +281,8 @@ class SignalAggregator:
                 elif N_k + i % 2 != 0:
                     P[i] = (N_k - i - 1) / (2 * (N_k - i))
                 elif (N_k + i % 2 == 0) and (N_k != 1):
-                    P[i][k] = 1 - ((N_k - i) / (2 * (N_k -1)))
-                idx = np.argwhere(signal_peaks == freq)[0][i]
+                    P[i] = 1 - ((N_k - i) / (2 * (N_k -1)))
+                idx = np.argwhere(signal_peaks == freq)[i][0]
                 Ps.append([idx, P[i]])
         return Ps
 
@@ -325,14 +295,3 @@ class SignalAggregator:
         L_av = np.where(gain_val > 0, L_c / gain_val, 0)
         # apply ema filter
         return L_av
-
-
-def process(t, x, osc):
-    "Fill the array (so the table) with white noise."
-    arr = np.asarray(t.getBuffer())
-    arr[:] = x
-    return osc
-
-def done(t):
-    arr = np.asarray(t.getBuffer())
-    return arr

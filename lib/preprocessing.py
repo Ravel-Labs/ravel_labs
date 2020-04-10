@@ -40,6 +40,10 @@ def butter_bandpass(lowcut, highcut, fs, order):
     b, a = butter(order, [low, high], btype='band', analog=False)
     return b, a
 
+def calc_f_osc(x_d, b, a): return lfilter([1+b[0], b[1], b[2]], a, x_d)
+
+def calc_f0(x_d, b, a): return lfilter(b, a, x_d) * 2
+
 def cf_avg(signals):
     sum = 0
     for sig in signals:
@@ -77,17 +81,6 @@ def compute_norm_fft_db(db_signal, peak, n_fft, window_size, hop_length):
     norm_fft_db = librosa.amplitude_to_db(norm_fft)
     return norm_fft_db
 
-
-# def compute_norm_fft_db(signal, R, n_fft, window_size, hop_length):
-#     """Calculate scalar for signal on a linear scale"""
-#     x = signal
-#     n = x.shape[0]
-#     a = np.sqrt((n * R**2) / np.sum(x**2))
-#     x_norm_db = a * librosa.amplitude_to_db(x)
-#     norm_fft_db = np.abs(librosa.core.stft(x_norm_db, n_fft=n_fft, 
-#                                         win_length=window_size, hop_length=hop_length))
-#     return norm_fft_db
-
 def compute_chunk(norm_fft_db, window_size, sr, seconds):
     fft_length = norm_fft_db.shape[1]
     num_freqs = norm_fft_db.shape[0]
@@ -106,6 +99,13 @@ def compute_chunk(norm_fft_db, window_size, sr, seconds):
             avg_mat[i][j] = mu
     return avg_mat
 
+def compute_lfe(signal, order, cutoff, sr):
+    lf_x = low_pass(signal, order, cutoff, sr)
+    x_low = np.abs(librosa.core.stft(lf_x, n_fft=1024, hop_length=512))
+    x = np.abs(librosa.core.stft(signal, n_fft=1024, hop_length=512))
+    lfe = np.sum(np.divide(x_low, x, out=np.zeros_like(x_low), where=x!=0))
+    return lfe
+
 def compute_rank(chunk_fft_db): 
     a = np.zeros(chunk_fft_db.shape)
     for row in range(chunk_fft_db.shape[1]):
@@ -123,6 +123,12 @@ def compute_sparsity(rank, num_bins):
             sparse_vec[0, i] = 1
     return sparse_vec
 
+def compute_makeup_gain(x_in, x_out, rate):
+    meter = pyln.Meter(rate)
+    loudness_in = meter.integrated_loudness(x_in)
+    loudness_out = meter.integrated_loudness(x_out)
+    return loudness_in - loudness_out
+
 def crest_attack_release(attack_max, release_max, crest_factor_sq):
     attack = (2 * attack_max) / crest_factor_sq
     release = (2 * release_max) / crest_factor_sq - attack
@@ -135,6 +141,29 @@ def crest_factor(peaks, rms):
     return np.sqrt(crest_factor)
 
 def ema(x, y, decay): return ((1-decay)*x) + (decay*y)
+
+def eq_filter(x, fc, sr, G, f_b, f_type="boost"):
+    d = -np.cos(2*np.pi * (fc/sr))
+    V0 = 10**(G/20)
+    H0 = V0 - 1
+    c_boost = (np.tan(np.pi * (f_b / sr)) - 1) / np.tan(np.pi*(f_b/sr) + 1)
+    c_cut = (np.tan(np.pi*(f_b/sr)) - V0) / (np.tan(np.pi*(f_b/sr)) + V0)
+    x_h = np.zeros(x.shape[0])
+    y1 = np.zeros(x.shape[0])
+    y = np.zeros(x.shape[0])
+    if f_type == "boost":
+        c = c_boost
+    elif f_type == "cut":
+        c = c_cut
+    for n in range(x_h.shape[0]):
+        if n < 2:
+            x_h[n] = x[n]
+            y1[n] = -c * x_h[n]
+        else:
+            x_h[n] = x[n] - d * (1 - c) * x_h[n-1] + c * x_h[n-2]
+            y1[n] = -c * x_h[n] + d * (1 - c) * x_h[n-1] + x_h[n-2]
+        y[n] = (H0 / 2) * (x[n] - y1[n]) + x[n]
+    return y
 
 def export_params(path, files, rank_threshold, window_size, hop_length, sr, max_n):
     '''
@@ -185,16 +214,6 @@ def fft_avg(audio_signal, window_size, hop_length, sr):
 	D_db = librosa.amplitude_to_db(D)
 	return np.mean(D_db, axis=1)
 
-# def fft_chunk_avg(path, window_size, hop_length):
-#     sr = librosa.get_samplerate(path)
-#     y, sr = librosa.load(path, sr=sr)
-#     onset_env = librosa.onset.onset_strength(y, sr=sr)
-#     tempo = librosa.beat.tempo(onset_envelope=onset_env, sr=sr)
-#     D = np.abs(librosa.core.stft(y, n_fft=window_size, hop_length=hop_length))
-#     D_db = librosa.amplitude_to_db(D)
-#     D_s = librosa.core.frames_to_samples(D_db, hop_length=hop_length, n_fft=window_size)
-
-
 def file_scraper(path): return [f for f in os.listdir(path) if not f.startswith('.') and os.path.isfile(os.path.join(path, f))]
 
 def full_file_scraper(path): 
@@ -211,7 +230,16 @@ def freq_bin(signal, n, sr): return n * (sr / signal.shape[0])
 
 def half_wave_rectifier(x): return (x + np.absolute(x)) / 2
 
-def knee_width(thresh): return abs(thresh) / 2
+def h_lp(fc, sr, Q):
+    k = np.tan(np.pi*(fc/sr))
+    k_1 = 1 / (1+(k/Q)+k**2)
+    a_0 = 1
+    a_1 = 2 * (k**2 - 1) * k_1
+    a_2 = (1 - (k / Q) + k**2) * k_1
+    b_0 = k**2 * k_1
+    b_1 = 2 * k * k_1
+    b_2 = k**2 * k_1
+    return np.array([b_0, b_1, b_2]), np.array([a_0, a_1, a_2])
 
 def lf_avg(signals, order, cutoff, sr):
     sum = 0  
@@ -248,25 +276,12 @@ def loudness(x, decay):
         e_y[0] = e_y[1]
     return L_m
 
-def compute_lfe(signal, order, cutoff, sr):
-    lf_x = low_pass(signal, order, cutoff, sr)
-    x_low = np.abs(librosa.core.stft(lf_x, n_fft=1024, hop_length=512))
-    x = np.abs(librosa.core.stft(signal, n_fft=1024, hop_length=512))
-    lfe = np.sum(np.divide(x_low, x, out=np.zeros_like(x_low), where=x!=0))
-    return lfe  
-
 def low_pass(signal, order, cutoff, sr):
     nyq = sr * 0.5
     normal_cutoff = cutoff / nyq
     b,a = scipy.signal.butter(order, normal_cutoff)
     y = scipy.signal.lfilter(b, a, signal)
     return y
-
-def compute_makeup_gain(x_in, x_out, rate):
-    meter = pyln.Meter(rate)
-    loudness_in = meter.integrated_loudness(x_in)
-    loudness_out = meter.integrated_loudness(x_out)
-    return loudness_in - loudness_out  
 
 def mask(signal_a, signals, rank_threshold, window_size, hop_length, sr, max_n):
     '''
@@ -434,6 +449,12 @@ def peak_filter_bank(signal, cutoffs, sr, order, btype, window_step, num_steps):
     max_idx = np.argmax(freq_counts[:][1])
     return cutoffs[max_idx]
 
+def preprocess_pll(x, high_cutoff, low_cutoff, sr, high_order, low_order, x_env):
+    x_low = apply_bfilter(x, cutoff=low_cutoff, sr=sr, order=low_order, btype='low')
+    x = apply_bfilter(x_low, cutoff=high_cutoff, sr=sr, order=high_order, btype='high')
+    x_in = x * (1/x_env)
+    return x_in
+
 def rank_signal_1d(audio_signal):
 	return np.abs(rankdata(audio_signal, method='min') - (audio_signal.shape[0])) + 1
 
@@ -444,11 +465,6 @@ def rank_signal_2d(audio_signal):
     return a
 
 def rank_soa_vec(soa_vec): return np.abs(rankdata(soa_vec, method='min') - (soa_vec.shape[0])) + 1
-
-def ratio(wp, wf):return 0.54*wp + 0.764*wf + 1
-
-def release(release_max, crest_factor_n2):
-    return (2*release_max) / crest_factor_n2
 
 def rms_normalization(x, R):
     """Calculate scalar for signal on a linear scale"""
@@ -479,10 +495,33 @@ def spectral_flux(fft_signal):
     spectral_flux = hwr / np.absolute(fft_signal)
     return np.sum(spectral_flux, axis=0)
 
-def threshold(rms, wp):return -11.03 + 0.44*rms - 4.897*wp
+def tonal_balance(path, high_cutoff, low_cutoff, high_order, low_order, x_env, Q, K_d, fc, G, f_b, f_type):
+    sig = Signal(path=path, window_size=1024, hop_length=512)
+    x = sig.signal
+    sr = sig.sr
+    x_in = preprocess_pll(x, high_cutoff=high_cutoff, low_cutoff=low_cutoff, 
+                          sr=sr, high_order=high_order, low_order=low_order, x_env=x_env)
+    b, a = h_lp(fc=fc, sr=sr, Q=Q)
+    x_d = x_in * K_d
+    f_osc = calc_f_osc(x_d, b, a)
+    y_cos_osc = np.zeros(f_osc.shape)
+    y_sin_osc = np.zeros(f_osc.shape)
+    for n in range(x_in.shape[0]):
+        y_cos_osc[n] = np.cos(2*np.pi * (f_osc[n] / 44100) * n)
+        y_sin_osc[n] = np.sin(2*np.pi * (f_osc[n] / 44100) * n)
+    x_d = x_d * y_cos_osc
+    f0 = calc_f0(x_d, b, a)
+    f0_fft = np.abs(np.fft.fft(f0))
+    bins_arr = [20, 40, 60, 80, 100, 150, 200, 250, 500, 750, 1000, 1250, 1500]
+    val, bins = np.histogram(f0_fft, bins=bins_arr, range=(20, 1500), density=False)
+    top_vals = np.argsort(mask)[-5:]
+    top_freqs = bins[top_vals]
+    y = x
+    for freq in top_freqs:
+        y = eq_filter(y, fc=fc, sr=sr, G=G, f_b=f_b, f_type=f_type)
+    return y
 
 def wp(cf, cf_avg, std):
-    # cfs = cf(signal)
     gaussian = ((cf - cf_avg)**2) / (2*(std**2))
     if cf <= cf_avg:
         wp = np.exp(gaussian)
