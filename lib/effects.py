@@ -235,6 +235,41 @@ class PanSignal(Signal):
         right = np.sin(P * np.pi) * self.signal
         return np.dstack((left,right))[0]
 
+class DeEsserSignal(Signal):
+    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, 
+                critical_bands, c, zcr_thresh, e_thresh, max_reduction):
+        super().__init__(path, signal, n_fft, window_size, hop_length, peak)
+        self.critical_bands = critical_bands
+        self.c = c
+        self.zcr_thresh = zcr_thresh
+        self.e_thresh = e_thresh
+        self.max_reduction = max_reduction
+        self.fft = np.fft.fft(self.signal)
+        self.sig_z = preprocessing.freq_to_bark(self.fft)
+        self.N_z = preprocessing.compute_Nz(self.critical_bands)
+        self.g_z = np.exp(0.71 * self.sig_z)
+
+        ## use interpolation to fill in the values across frames to get n values
+        ## window size and hop_length should be used for computing ste and zcr?
+        def compute_sharpess(self):
+            N = self.signal.shape[0]
+            S = np.zeros(N)
+            for n in range(N):
+                numr = np.sum(self.N_z * self.g_z[n])
+                denom = np.sum(self.N_z)
+                S[n] = self.c * (numr / denom)
+            return S
+
+        def compute_zcr(self):
+            pass
+
+        def compute_ste(self):
+            pass
+
+        def deesser(self):
+            pass
+
+
 
 class Converter:
     def __init__(self, signal):

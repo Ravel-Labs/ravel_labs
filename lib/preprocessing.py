@@ -73,6 +73,17 @@ def compression_parameters(path, files, time_constant, order, cutoff, sr, std, a
         compress_info.append({signal_paths[i]:[t, r, a, rel, kw]})
     return compress_info
 
+def compute_a0(f): return 6.5 * np.exp((-0.6*((f/1000)-3.3))**2) - 10**-3 * (f/1000)**4
+
+def compute_Nz(critical_bands): 
+    num = len(critical_bands)
+    N = np.zeros(num)
+    for z in range(num):
+        a0_z = compute_a0(critical_bands[z])
+        I_z = freq_to_bark(critical_bands[z])
+        N[z] = a0_z * I_z
+    return N
+
 def compute_norm_fft_db(db_signal, peak, n_fft, window_size, hop_length):
     x_norm_db = normalize(db_signal, peak)
     x_norm = librosa.db_to_amplitude(x_norm_db)
@@ -227,6 +238,8 @@ def forget_factor(time_constant, sr):
     return np.exp(-1 / (time_constant * sr))
 
 def freq_bin(signal, n, sr): return n * (sr / signal.shape[0])
+
+def freq_to_bark(arr): return 13 * np.arctan((0.76/1000) * arr) + 3.5 * np.arctan(arr/1000)**2
 
 def half_wave_rectifier(x): return (x + np.absolute(x)) / 2
 
