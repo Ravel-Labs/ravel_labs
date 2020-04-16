@@ -237,10 +237,11 @@ class PanSignal(Signal):
 
 class DeEsserSignal(Signal):
     def __init__(self, path, signal, n_fft, window_size, hop_length, peak, 
-                critical_bands, c, zcr_thresh, e_thresh, max_reduction):
+                critical_bands, c, sharp_thresh, zcr_thresh, e_thresh, max_reduction):
         super().__init__(path, signal, n_fft, window_size, hop_length, peak)
         self.critical_bands = critical_bands
         self.c = c
+        self.sharp_thresh = sharp_thresh
         self.zcr_thresh = zcr_thresh
         self.e_thresh = e_thresh
         self.max_reduction = max_reduction
@@ -261,13 +262,37 @@ class DeEsserSignal(Signal):
             return S
 
         def compute_zcr(self):
-            pass
+            y0 = preprocessing.apply_bfilter(self.signal, 60, self.sr, 1, 'highpass')
+            y1 = preprocessing.apply_bfilter(y1, 600, self.sr, 1, 'lowpass')
+            zcr = librosa.feature.zero_crossing_rate(y1, frame_length=self.window_size, 
+                                                    hop_length=self.hop_length)
+            return zcr
 
-        def compute_ste(self):
-            pass
+        def compute_ste(self, rab):
+            N = self.window_size
+            frames = librosa.util.frame(self.signal, frame_length=self.window_size,
+                                        hop_length=self.hop_length)
+            if rab:
+                idx = np.array(range(256))
+                hn = 0.54 - 0.46 * np.cos(2*np.pi * idx / (N-1))
+                ste = np.sum(frames*hn, axis=0, keepdims=True)
+                return ste
+            ste = np.mean(np.abs(frames)**2, axis=0, keepdims=True)
+            return ste
 
-        def deesser(self):
-            pass
+        def gain_reduction(self, sharpness):
+            N = sharpness.shape[0]
+            sharpness
+            reduction = np.zeros(N)
+            for n in range(N):
+                if sharpness[n] > self.sharp_thresh:
+                    reduction[n] = 10**(sharpness**2/5)
+            return reduction
+
+        def deesser(self, gain):
+            y = librosa.amplitude_to_db(self.signal)
+            y_out = y - gain
+            return librosa.db_to_amplitude(y_out)
 
 
 
