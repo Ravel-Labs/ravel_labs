@@ -75,6 +75,9 @@ def compression_parameters(path, files, time_constant, order, cutoff, sr, std, a
 
 def compute_a0(f): return 6.5 * np.exp((-0.6*((f/1000)-3.3))**2) - 10**-3 * (f/1000)**4
 
+def compute_gz(z): return np.where(z < 14, 1, 0.00012*z**4 - 0.0056*z**3 + 0.1*z**2 - 0.81*z + 3.51)
+ 
+
 def compute_Nz(critical_bands): 
     num = len(critical_bands)
     N = np.zeros(num)

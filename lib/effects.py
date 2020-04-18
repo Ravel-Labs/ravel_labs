@@ -245,54 +245,54 @@ class DeEsserSignal(Signal):
         self.zcr_thresh = zcr_thresh
         self.e_thresh = e_thresh
         self.max_reduction = max_reduction
-        self.fft = np.fft.fft(self.signal)
+        self.fft = np.abs(np.fft.fft(self.signal))
         self.sig_z = preprocessing.freq_to_bark(self.fft)
         self.N_z = preprocessing.compute_Nz(self.critical_bands)
-        self.g_z = np.exp(0.71 * self.sig_z)
+        self.g_z = np.exp(0.171 * self.sig_z)
 
-        ## use interpolation to fill in the values across frames to get n values
-        ## window size and hop_length should be used for computing ste and zcr?
-        def compute_sharpess(self):
-            N = self.signal.shape[0]
-            S = np.zeros(N)
-            for n in range(N):
-                numr = np.sum(self.N_z * self.g_z[n])
-                denom = np.sum(self.N_z)
-                S[n] = self.c * (numr / denom)
-            return S
+    ## use interpolation to fill in the values across frames to get n values
+    ## window size and hop_length should be used for computing ste and zcr?
+    def compute_sharpness(self):
+        N = self.signal.shape[0]
+        S = np.zeros(N)
+        for n in range(N):
+            numr = np.sum(self.N_z * self.g_z[n])
+            denom = np.sum(self.N_z)
+            S[n] = self.c * (numr / denom)
+        return S
 
-        def compute_zcr(self):
-            y0 = preprocessing.apply_bfilter(self.signal, 60, self.sr, 1, 'highpass')
-            y1 = preprocessing.apply_bfilter(y1, 600, self.sr, 1, 'lowpass')
-            zcr = librosa.feature.zero_crossing_rate(y1, frame_length=self.window_size, 
-                                                    hop_length=self.hop_length)
-            return zcr
+    def compute_zcr(self):
+        y0 = preprocessing.apply_bfilter(self.signal, 60, self.sr, 1, 'highpass')
+        y1 = preprocessing.apply_bfilter(y1, 600, self.sr, 1, 'lowpass')
+        zcr = librosa.feature.zero_crossing_rate(y1, frame_length=self.window_size, 
+                                                hop_length=self.hop_length)
+        return zcr
 
-        def compute_ste(self, rab):
-            N = self.window_size
-            frames = librosa.util.frame(self.signal, frame_length=self.window_size,
-                                        hop_length=self.hop_length)
-            if rab:
-                idx = np.array(range(256))
-                hn = 0.54 - 0.46 * np.cos(2*np.pi * idx / (N-1))
-                ste = np.sum(frames*hn, axis=0, keepdims=True)
-                return ste
-            ste = np.mean(np.abs(frames)**2, axis=0, keepdims=True)
+    def compute_ste(self, rab):
+        N = self.window_size
+        frames = librosa.util.frame(self.signal, frame_length=self.window_size,
+                                    hop_length=self.hop_length)
+        if rab:
+            idx = np.array(range(256))
+            hn = 0.54 - 0.46 * np.cos(2*np.pi * idx / (N-1))
+            ste = np.sum(frames*hn, axis=0, keepdims=True)
             return ste
+        ste = np.mean(np.abs(frames)**2, axis=0, keepdims=True)
+        return ste
 
-        def gain_reduction(self, sharpness):
-            N = sharpness.shape[0]
-            sharpness
-            reduction = np.zeros(N)
-            for n in range(N):
-                if sharpness[n] > self.sharp_thresh:
-                    reduction[n] = 10**(sharpness**2/5)
-            return reduction
+    def gain_reduction(self, sharpness):
+        N = sharpness.shape[0]
+        sharpness
+        reduction = np.zeros(N)
+        for n in range(N):
+            if sharpness[n] > self.sharp_thresh:
+                reduction[n] = 10**(sharpness**2/5)
+        return reduction
 
-        def deesser(self, gain):
-            y = librosa.amplitude_to_db(self.signal)
-            y_out = y - gain
-            return librosa.db_to_amplitude(y_out)
+    def deesser(self, gain):
+        y = librosa.amplitude_to_db(self.signal)
+        y_out = y - gain
+        return librosa.db_to_amplitude(y_out)
 
 
 
