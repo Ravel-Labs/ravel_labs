@@ -237,29 +237,37 @@ class PanSignal(Signal):
 
 class DeEsserSignal(Signal):
     def __init__(self, path, signal, n_fft, window_size, hop_length, peak, 
-                critical_bands, c, sharp_thresh, zcr_thresh, e_thresh, max_reduction):
+                critical_bands, c, sharp_thresh, max_reduction):
         super().__init__(path, signal, n_fft, window_size, hop_length, peak)
         self.critical_bands = critical_bands
+        self.bark_idx = preprocessing.freq_bark_map(self.freqs, self.critical_bands)
         self.c = c
         self.sharp_thresh = sharp_thresh
-        self.zcr_thresh = zcr_thresh
-        self.e_thresh = e_thresh
         self.max_reduction = max_reduction
-        self.fft = np.abs(np.fft.fft(self.signal))
-        self.sig_z = preprocessing.freq_to_bark(self.fft)
-        self.N_z = preprocessing.compute_Nz(self.critical_bands)
-        self.g_z = np.exp(0.171 * self.sig_z)
+        # self.fft = np.abs(np.fft.fft(self.signal))
+        # self.fft = np.abs(librosa.stft(self.signal, n_fft=self.n_fft, hop_length=self.hop_length, 
+        #                                 win_length=self.window_size))
+        self.bark_fft = preprocessing.compute_barks(self.fft)
+        self.cb_fft = preprocessing.critical_band_sum(self.bark_fft, self.bark_idx, len(critical_bands))
+        self.N_z = preprocessing.compute_Nz(self.cb_fft)
+        # self.g_z = np.exp(0.171 * self.sig_z)
+        self.g_z = np.apply_along_axis(np.exp, 0, (0.171*self.cb_fft))
 
-    ## use interpolation to fill in the values across frames to get n values
-    ## window size and hop_length should be used for computing ste and zcr?
+    # def compute_sharpness(self):
+    #     N = self.signal.shape[0]
+    #     S = np.zeros(N)
+    #     denom = np.sum(self.N_z)
+    #     for n in range(N):
+    #         numr = np.sum(self.N_z * self.g_z[n])
+    #         S[n] = self.c * (numr / denom)
+    #     return S
+
     def compute_sharpness(self):
-        N = self.signal.shape[0]
-        S = np.zeros(N)
-        for n in range(N):
-            numr = np.sum(self.N_z * self.g_z[n])
-            denom = np.sum(self.N_z)
-            S[n] = self.c * (numr / denom)
+        numr = np.sum(self.N_z*self.g_z, axis=0)
+        denom = np.sum(self.N_z, axis=0)
+        S = self.c * (numr / denom)
         return S
+
 
     def compute_zcr(self):
         y0 = preprocessing.apply_bfilter(self.signal, 60, self.sr, 1, 'highpass')
@@ -283,16 +291,18 @@ class DeEsserSignal(Signal):
     def gain_reduction(self, sharpness):
         N = sharpness.shape[0]
         sharpness
-        reduction = np.zeros(N)
+        gain = np.ones(N)
         for n in range(N):
             if sharpness[n] > self.sharp_thresh:
-                reduction[n] = 10**(sharpness**2/5)
-        return reduction
+                gain[n] = 1 + (np.log(sharpness[n]) / np.log(0.1))
+                if reduction[n] > self.max_reduction:
+                    reduction[n] = self.max_reduction
+
+        return gain
 
     def deesser(self, gain):
-        y = librosa.amplitude_to_db(self.signal)
-        y_out = y - gain
-        return librosa.db_to_amplitude(y_out)
+        y_out = self.signal * gain
+        return y_out
 
 
 

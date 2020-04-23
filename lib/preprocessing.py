@@ -78,13 +78,21 @@ def compute_a0(f): return 6.5 * np.exp((-0.6*((f/1000)-3.3))**2) - 10**-3 * (f/1
 def compute_gz(z): return np.where(z < 14, 1, 0.00012*z**4 - 0.0056*z**3 + 0.1*z**2 - 0.81*z + 3.51)
  
 
-def compute_Nz(critical_bands): 
-    num = len(critical_bands)
-    N = np.zeros(num)
+# def compute_Nz(critical_bands): 
+#     num = len(critical_bands)
+#     N = np.zeros(num)
+#     for z in range(num):
+#         a0_z = compute_a0(critical_bands[z])
+#         I_z = freq_to_bark(critical_bands[z])
+#         N[z] = a0_z * I_z
+#     return N
+
+def compute_Nz(critical_band_fft):
+    num = critical_band_fft.shape[0]
+    N = np.zeros(critical_band_fft.shape)
     for z in range(num):
-        a0_z = compute_a0(critical_bands[z])
-        I_z = freq_to_bark(critical_bands[z])
-        N[z] = a0_z * I_z
+        a0_z = compute_a0(critical_band_fft[z][:])
+        N[z] = a0_z * critical_band_fft[z][:]
     return N
 
 def compute_norm_fft_db(db_signal, peak, n_fft, window_size, hop_length):
@@ -243,6 +251,27 @@ def forget_factor(time_constant, sr):
 def freq_bin(signal, n, sr): return n * (sr / signal.shape[0])
 
 def freq_to_bark(arr): return 13 * np.arctan((0.76/1000) * arr) + 3.5 * np.arctan(arr/1000)**2
+
+def freq_bark_map(freqs, critical_bands):
+    #computes row indices that belong in critical band
+    # loops through critical bands and puts freq index in list if its less than or equal to critical band
+    bark_idx = []
+    for i in range(len(critical_bands)-1):
+        idx = np.argwhere(freqs > critical_bands[i] and freqs <= critical_bands[i+1]).flatten()
+        freq_bark.append(idx)
+    return bark_idx
+
+def critical_band_sum(bark_mat, bark_idx, N):
+    M = bark_mat.shape[1]
+    c_band_sum = np.zeros(N, M)
+    for n in range(N):
+        c_band_sum[n] = np.sum(bark_mat[bark_idx[n]][:], axis=0)
+    return c_band_sum
+
+def compute_barks(fft):
+    barks = np.apply_along_axis(freq_to_bark, 0, fft)
+    return barks
+
 
 def half_wave_rectifier(x): return (x + np.absolute(x)) / 2
 
