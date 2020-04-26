@@ -244,30 +244,15 @@ class DeEsserSignal(Signal):
         self.c = c
         self.sharp_thresh = sharp_thresh
         self.max_reduction = max_reduction
-        # self.fft = np.abs(np.fft.fft(self.signal))
-        # self.fft = np.abs(librosa.stft(self.signal, n_fft=self.n_fft, hop_length=self.hop_length, 
-        #                                 win_length=self.window_size))
-        self.bark_fft = preprocessing.compute_barks(self.fft)
-        self.cb_fft = preprocessing.critical_band_sum(self.bark_fft, self.bark_idx, len(critical_bands))
+        self.cb_fft = preprocessing.critical_band_sum(self.fft, self.bark_idx, len(critical_bands))
         self.N_z = preprocessing.compute_Nz(self.cb_fft)
-        # self.g_z = np.exp(0.171 * self.sig_z)
         self.g_z = np.apply_along_axis(np.exp, 0, (0.171*self.cb_fft))
-
-    # def compute_sharpness(self):
-    #     N = self.signal.shape[0]
-    #     S = np.zeros(N)
-    #     denom = np.sum(self.N_z)
-    #     for n in range(N):
-    #         numr = np.sum(self.N_z * self.g_z[n])
-    #         S[n] = self.c * (numr / denom)
-    #     return S
 
     def compute_sharpness(self):
         numr = np.sum(self.N_z*self.g_z, axis=0)
         denom = np.sum(self.N_z, axis=0)
-        S = self.c * (numr / denom)
+        S = self.c * (numr / (denom+1e-9))
         return S
-
 
     def compute_zcr(self):
         y0 = preprocessing.apply_bfilter(self.signal, 60, self.sr, 1, 'highpass')
@@ -295,15 +280,20 @@ class DeEsserSignal(Signal):
         for n in range(N):
             if sharpness[n] > self.sharp_thresh:
                 gain[n] = 1 + (np.log(sharpness[n]) / np.log(0.1))
-                if reduction[n] > self.max_reduction:
-                    reduction[n] = self.max_reduction
+                if gain[n] < self.max_reduction:
+                    gain[n] = self.max_reduction
 
         return gain
 
     def deesser(self, gain):
-        y_out = self.signal * gain
-        return y_out
-
+        frame_sig = librosa.util.frame(self.signal, frame_length=self.n_fft, hop_length=self.hop_length)
+        M, N = frame_sig.shape[0], frame_sig.shape[1]
+        # fix padding that makes these dimensions not always aligned via stft
+        # quick fix is a truncation of array 
+        y = np.zeros((M, N))
+        for m in range(M):
+            y[m] = gain[m] * frame_sig[m]
+        return y.flatten('F')
 
 
 class Converter:
