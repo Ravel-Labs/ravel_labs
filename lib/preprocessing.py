@@ -93,6 +93,12 @@ def compute_chunk(norm_fft_db, window_size, sr, seconds):
             avg_mat[i][j] = mu
     return avg_mat
 
+def compute_effect_signal(y, effect_percent, hp_freq, lp_freq, order, sr):
+    effect_signal = y * effect_percent
+    y_hp = apply_bfilter(effect_signal, hp_freq, sr, order, 'highpass')
+    y_out = apply_bfilter(y_hp, lp_freq, sr, order, 'lowpass')
+    return y_out
+
 def compute_gz(z): return np.where(z < 14, 1, 0.00012*z**4 - 0.0056*z**3 + 0.1*z**2 - 0.81*z + 3.51)
 
 def compute_lfe(signal, order, cutoff, sr):
