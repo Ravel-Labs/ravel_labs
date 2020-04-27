@@ -73,13 +73,7 @@ def compression_parameters(path, files, time_constant, order, cutoff, sr, std, a
         compress_info.append({signal_paths[i]:[t, r, a, rel, kw]})
     return compress_info
 
-def compute_norm_fft_db(db_signal, peak, n_fft, window_size, hop_length):
-    x_norm_db = normalize(db_signal, peak)
-    x_norm = librosa.db_to_amplitude(x_norm_db)
-    norm_fft = np.abs(librosa.core.stft(x_norm, n_fft=n_fft, 
-                                    win_length=window_size, hop_length=hop_length))
-    norm_fft_db = librosa.amplitude_to_db(norm_fft)
-    return norm_fft_db
+def compute_a0(f): return 6.5 * np.exp((-0.6*((f/1000)-3.3))**2) - 10**-3 * (f/1000)**4
 
 def compute_chunk(norm_fft_db, window_size, sr, seconds):
     fft_length = norm_fft_db.shape[1]
@@ -99,12 +93,36 @@ def compute_chunk(norm_fft_db, window_size, sr, seconds):
             avg_mat[i][j] = mu
     return avg_mat
 
+def compute_gz(z): return np.where(z < 14, 1, 0.00012*z**4 - 0.0056*z**3 + 0.1*z**2 - 0.81*z + 3.51)
+
 def compute_lfe(signal, order, cutoff, sr):
     lf_x = low_pass(signal, order, cutoff, sr)
     x_low = np.abs(librosa.core.stft(lf_x, n_fft=1024, hop_length=512))
     x = np.abs(librosa.core.stft(signal, n_fft=1024, hop_length=512))
     lfe = np.sum(np.divide(x_low, x, out=np.zeros_like(x_low), where=x!=0))
     return lfe
+
+def compute_makeup_gain(x_in, x_out, rate):
+    meter = pyln.Meter(rate)
+    loudness_in = meter.integrated_loudness(x_in)
+    loudness_out = meter.integrated_loudness(x_out)
+    return loudness_in - loudness_out
+
+def compute_norm_fft_db(db_signal, peak, n_fft, window_size, hop_length):
+    x_norm_db = normalize(db_signal, peak)
+    x_norm = librosa.db_to_amplitude(x_norm_db)
+    norm_fft = np.abs(librosa.core.stft(x_norm, n_fft=n_fft, 
+                                    win_length=window_size, hop_length=hop_length))
+    norm_fft_db = librosa.amplitude_to_db(norm_fft)
+    return norm_fft_db
+
+def compute_Nz(critical_band_fft):
+    num = critical_band_fft.shape[0]
+    N = np.zeros(critical_band_fft.shape)
+    for z in range(num):
+        a0_z = compute_a0(critical_band_fft[z][:])
+        N[z] = a0_z * critical_band_fft[z][:]
+    return N
 
 def compute_rank(chunk_fft_db): 
     a = np.zeros(chunk_fft_db.shape)
@@ -123,12 +141,6 @@ def compute_sparsity(rank, num_bins):
             sparse_vec[0, i] = 1
     return sparse_vec
 
-def compute_makeup_gain(x_in, x_out, rate):
-    meter = pyln.Meter(rate)
-    loudness_in = meter.integrated_loudness(x_in)
-    loudness_out = meter.integrated_loudness(x_out)
-    return loudness_in - loudness_out
-
 def crest_attack_release(attack_max, release_max, crest_factor_sq):
     attack = (2 * attack_max) / crest_factor_sq
     release = (2 * release_max) / crest_factor_sq - attack
@@ -139,6 +151,16 @@ def crest_factor(peaks, rms):
     crest_factor[0] = 0
     crest_factor[1:] = peaks[1:] / rms[1:]
     return np.sqrt(crest_factor)
+
+def critical_band_sum(bark_mat, bark_idx, N):
+    M = bark_mat.shape[1]
+    c_band_sum = np.zeros((N, M))
+    for n in range(N):
+        if bark_mat[n].size != 0:
+            c_band_sum[n] = np.sum(bark_mat[bark_idx[n]], axis=0)[:M]
+        else:
+            c_band_sum[n] = 0
+    return c_band_sum
 
 def ema(x, y, decay): return ((1-decay)*x) + (decay*y)
 
@@ -227,6 +249,19 @@ def forget_factor(time_constant, sr):
     return np.exp(-1 / (time_constant * sr))
 
 def freq_bin(signal, n, sr): return n * (sr / signal.shape[0])
+
+def freq_to_bark(arr): return 13 * np.arctan((0.76/1000) * arr) + 3.5 * np.arctan(arr/1000)**2
+
+def freq_bark_map(freqs, critical_bands):
+    #computes row indices that belong in critical band
+    # loops through critical bands and puts freq index in list if its less than or equal to critical band
+    bark_idx = []
+    bark_idx.append(np.argwhere(freqs < critical_bands[0]))
+    for i in range(len(critical_bands)-1):
+        idx = np.argwhere((freqs > critical_bands[i]) & (freqs <= critical_bands[i+1])).flatten()
+        bark_idx.append(idx)
+    return bark_idx
+
 
 def half_wave_rectifier(x): return (x + np.absolute(x)) / 2
 

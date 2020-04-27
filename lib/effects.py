@@ -235,6 +235,66 @@ class PanSignal(Signal):
         right = np.sin(P * np.pi) * self.signal
         return np.dstack((left,right))[0]
 
+class DeEsserSignal(Signal):
+    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, 
+                critical_bands, c, sharp_thresh, max_reduction):
+        super().__init__(path, signal, n_fft, window_size, hop_length, peak)
+        self.critical_bands = critical_bands
+        self.bark_idx = preprocessing.freq_bark_map(self.freqs, self.critical_bands)
+        self.c = c
+        self.sharp_thresh = sharp_thresh
+        self.max_reduction = max_reduction
+        self.cb_fft = preprocessing.critical_band_sum(self.fft, self.bark_idx, len(critical_bands))
+        self.N_z = preprocessing.compute_Nz(self.cb_fft)
+        self.g_z = np.apply_along_axis(np.exp, 0, (0.171*self.cb_fft))
+
+    def compute_sharpness(self):
+        numr = np.sum(self.N_z*self.g_z, axis=0)
+        denom = np.sum(self.N_z, axis=0)
+        S = self.c * (numr / (denom+1e-9))
+        return S
+
+    def compute_zcr(self):
+        y0 = preprocessing.apply_bfilter(self.signal, 60, self.sr, 1, 'highpass')
+        y1 = preprocessing.apply_bfilter(y1, 600, self.sr, 1, 'lowpass')
+        zcr = librosa.feature.zero_crossing_rate(y1, frame_length=self.window_size, 
+                                                hop_length=self.hop_length)
+        return zcr
+
+    def compute_ste(self, rab):
+        N = self.window_size
+        frames = librosa.util.frame(self.signal, frame_length=self.window_size,
+                                    hop_length=self.hop_length)
+        if rab:
+            idx = np.array(range(256))
+            hn = 0.54 - 0.46 * np.cos(2*np.pi * idx / (N-1))
+            ste = np.sum(frames*hn, axis=0, keepdims=True)
+            return ste
+        ste = np.mean(np.abs(frames)**2, axis=0, keepdims=True)
+        return ste
+
+    def gain_reduction(self, sharpness):
+        N = sharpness.shape[0]
+        sharpness
+        gain = np.ones(N)
+        for n in range(N):
+            if sharpness[n] > self.sharp_thresh:
+                gain[n] = 1 + (np.log(sharpness[n]) / np.log(0.1))
+                if gain[n] < self.max_reduction:
+                    gain[n] = self.max_reduction
+
+        return gain
+
+    def deesser(self, gain):
+        frame_sig = librosa.util.frame(self.signal, frame_length=self.n_fft, hop_length=self.hop_length)
+        M, N = frame_sig.shape[0], frame_sig.shape[1]
+        # fix padding that makes these dimensions not always aligned via stft
+        # quick fix is a truncation of array 
+        y = np.zeros((M, N))
+        for m in range(M):
+            y[m] = gain[m] * frame_sig[m]
+        return y.flatten('F')
+
 
 class Converter:
     def __init__(self, signal):
