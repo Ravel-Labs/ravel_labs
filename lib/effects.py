@@ -298,34 +298,26 @@ class DeEsserSignal(Signal):
 
 class ReverbSignal(Signal):
     def __init__(self, path, signal, n_fft, window_size, hop_length, peak,
-                reverbance, hf_damping, wet_gain, effect_percent, hp_freq, lp_freq, order,
-                stereo_depth):
+                reverbance, hf_damping, room_scale, wet_gain, effect_percent, hp_freq, lp_freq, order,
+                stereo_depth, pre_delay):
         super().__init__(path, signal, n_fft, window_size, hop_length, peak)
         self.reverbance = reverbance
         self.hf_damping = hf_damping
+        self.room_scale = room_scale
         self.wet_gain = wet_gain
         self.effect_percent = effect_percent
         self.hp_freq = hp_freq
         self.lp_freq = lp_freq
         self.order = order
         self.stereo_depth = stereo_depth
+        self.pre_delay = pre_delay
         self.effect_signal = preprocessing.compute_effect_signal(self.signal, self.effect_percent,
                                                                 self.hp_freq, self.lp_freq, self.order, self.sr)
         self.dry_signal = self.signal * (1 - self.effect_percent)
 
-
-    def compute_room_scale(self):
-        onsets = librosa.onset.onset_detect(y=self.signal, sr=self.sr, units='samples')
-        num_onsets = onsets.shape[0]
-        onsets_sec = num_onsets / self.sr
-        return onsets_sec
-
-    def compute_pre_delay(self):
-        pass
-
-    def reverb(self, room_scale, pre_delay):
-        fx = AudioEffectsChain().reverb(self.reverbance, self.hf_damping, room_scale, self.stereo_depth,
-                                        pre_delay, self.wet_gain)
+    def reverb(self):
+        fx = AudioEffectsChain().reverb(self.reverbance, self.hf_damping, self.room_scale, self.stereo_depth,
+                                        self.pre_delay, self.wet_gain)
         y_fx = fx(self.effect_signal)
         y_out = self.dry_signal + y_fx
         return y_out
