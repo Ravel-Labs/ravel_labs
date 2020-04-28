@@ -114,9 +114,7 @@ def compute_makeup_gain(x_in, x_out, rate):
     loudness_out = meter.integrated_loudness(x_out)
     return loudness_in - loudness_out
 
-def compute_norm_fft_db(db_signal, peak, n_fft, window_size, hop_length):
-    x_norm_db = normalize(db_signal, peak)
-    x_norm = librosa.db_to_amplitude(x_norm_db)
+def compute_norm_fft_db(x_norm, n_fft, window_size, hop_length):
     norm_fft = np.abs(librosa.core.stft(x_norm, n_fft=n_fft, 
                                     win_length=window_size, hop_length=hop_length))
     norm_fft_db = librosa.amplitude_to_db(norm_fft)

@@ -5,7 +5,7 @@ import librosa
 import numpy as np
 
 class Signal:
-    def __init__(self, path, signal, n_fft, window_size, hop_length, peak):
+    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type):
         self.path = path
         self.sr = librosa.get_samplerate(self.path)
         self.n_fft = n_fft
@@ -14,19 +14,20 @@ class Signal:
         self.signal = signal
         self.signal_db = librosa.amplitude_to_db(self.signal)
         self.peak = peak
+        self.audio_type = audio_type
+        self.x_norm = preprocessing.normalize(self.signal, self.peak)
         self.fft = np.abs(librosa.core.stft(self.signal, n_fft=self.n_fft, 
                                             win_length=self.window_size, hop_length=self.hop_length))
         self.num_bins = self.fft.shape[0]
         self.fft_db = librosa.amplitude_to_db(self.fft)
-        self.norm_fft_db = preprocessing.compute_norm_fft_db(self.signal_db, self.peak, 
-                                                self.n_fft, self.window_size, self.hop_length)
+        self.norm_fft_db = preprocessing.compute_norm_fft_db(self.x_norm, self.n_fft, self.window_size, self.hop_length)
         self.freqs = np.array([i * self.sr / self.fft.shape[0] for i in range(self.num_bins)])
 
 
 class EQSignal(Signal):
-    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, bins, roll_percent, seconds,
+    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type, bins, roll_percent, seconds,
                 rank_threshold, max_n, min_overlap_ratio, max_eq):
-        super().__init__(path, signal, n_fft, window_size, hop_length, peak)
+        super().__init__(path, signal, n_fft, window_size, hop_length, peak, audio_type)
         self.bins = bins
         self.roll_percent = roll_percent
         self.seconds = seconds
@@ -38,23 +39,23 @@ class EQSignal(Signal):
         self.min_overlap_ratio = min_overlap_ratio
         self.max_eq = max_eq
 
-    def compute_energy_percent(self):
-        total_energy = np.sum(self.chunk_fft_db)
-        energy_percents = []
-        for i in range(len(self.bins)-1):
-            arr = np.argwhere((self.freqs >= self.bins[i]) & (self.freqs < self.bins[i+1])).flatten()
-            bin_sum = np.sum([self.chunk_fft_db[i] for i in arr])
-            energy_percent = bin_sum / total_energy
-            energy_percents.append(energy_percent)
-        if energy_percents[0] < 0.2:
-            return self.bins[1]
+    # def compute_energy_percent(self):
+    #     total_energy = np.sum(self.chunk_fft_db)
+    #     energy_percents = []
+    #     for i in range(len(self.bins)-1):
+    #         arr = np.argwhere((self.freqs >= self.bins[i]) & (self.freqs < self.bins[i+1])).flatten()
+    #         bin_sum = np.sum([self.chunk_fft_db[i] for i in arr])
+    #         energy_percent = bin_sum / total_energy
+    #         energy_percents.append(energy_percent)
+    #     if energy_percents[0] < 0.2:
+    #         return self.bins[1]
 
-    def compute_rolloff(self):
-        rolloffs = librosa.feature.spectral_rolloff(self.signal, sr=self.sr, n_fft=self.n_fft, hop_length=self.hop_length, 
-                             win_length=self.window_size, roll_percent=self.roll_percent)
-        r_active = rolloffs[0, np.argwhere(rolloffs > 0).flatten()]
-        r_avg = np.mean(r_active)
-        return r_avg
+    # def compute_rolloff(self):
+    #     rolloffs = librosa.feature.spectral_rolloff(self.signal, sr=self.sr, n_fft=self.n_fft, hop_length=self.hop_length, 
+    #                          win_length=self.window_size, roll_percent=self.roll_percent)
+    #     r_active = rolloffs[0, np.argwhere(rolloffs > 0).flatten()]
+    #     r_avg = np.mean(r_active)
+    #     return r_avg
 
     def compute_mask(self, signal, overlap_vec, num_overlaps):
         soa_vec_i = preprocessing.sparse_overlap_avg(self.num_bins, self.chunk_fft_db, 
@@ -104,11 +105,15 @@ class EQSignal(Signal):
                 mask_val_scaled = (mask_val / top_m_max) * max_eq
                 eq_type = 0
                 eq_info.append([freq_bin, mask_val_scaled, eq_type])
-        rolloff = self.compute_rolloff()
-        energy_percent = self.compute_energy_percent()
-        eq_info.append([rolloff, 0.71, 2])
-        if energy_percent is not None:
-            eq_info.append([energy_percent, 0.71, 1])
+        if self.audio_type == "vocal":
+            # logic for subtractive EQ with highpass and shelf EQ
+            q_info.append([None])
+            eq_info.append([None])
+        # rolloff = self.compute_rolloff()
+        # energy_percent = self.compute_energy_percent()
+        # eq_info.append([rolloff, 0.71, 2])
+        # if energy_percent is not None:
+        #     eq_info.append([energy_percent, 0.71, 1])
         return eq_info
 
     def equalization(self, eq_info, Q):
@@ -131,9 +136,9 @@ class EQSignal(Signal):
 
 
 class CompressSignal(Signal):
-    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, 
+    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type, 
                 time_constant, order, cutoff, std, attack_max, release_max):
-        super().__init__(path, signal, n_fft, window_size, hop_length, peak)
+        super().__init__(path, signal, n_fft, window_size, hop_length, peak, audio_type)
         self.time_constant = time_constant
         self.order = order
         self.cutoff = cutoff
@@ -179,14 +184,13 @@ class CompressSignal(Signal):
         return gain(y)
 
 class FaderSignal(Signal):
-    def __init__(self, path, signal, n_fft, window_size, hop_length, peak,
+    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type,
                 decay, step, lead, B):
-        super().__init__(path, signal, n_fft, window_size, hop_length, peak)
+        super().__init__(path, signal, n_fft, window_size, hop_length, peak, audio_type)
         self.decay = decay
         self.step = step
         self.lead = lead
         self.B = B
-        self.x_norm = preprocessing.normalize(self.signal_db, self.peak)
     
     def full_loudness(self):
         x_norm = self.x_norm
@@ -212,9 +216,9 @@ class FaderSignal(Signal):
     def fader(self, fader_output): return self.signal * fader_output
 
 class PanSignal(Signal):
-    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, 
+    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type, 
                 cutoffs, window, order, btype):
-        super().__init__(path, signal, n_fft, window_size, hop_length, peak)
+        super().__init__(path, signal, n_fft, window_size, hop_length, peak, audio_type)
         self.window = window
         self.order = order
         self.btype = btype
@@ -236,9 +240,9 @@ class PanSignal(Signal):
         return np.dstack((left,right))[0]
 
 class DeEsserSignal(Signal):
-    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, 
+    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type,
                 critical_bands, c, sharp_thresh, max_reduction):
-        super().__init__(path, signal, n_fft, window_size, hop_length, peak)
+        super().__init__(path, signal, n_fft, window_size, hop_length, peak, audio_type)
         self.critical_bands = critical_bands
         self.bark_idx = preprocessing.freq_bark_map(self.freqs, self.critical_bands)
         self.c = c
@@ -297,10 +301,10 @@ class DeEsserSignal(Signal):
 
 
 class ReverbSignal(Signal):
-    def __init__(self, path, signal, n_fft, window_size, hop_length, peak,
+    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type,
                 reverbance, hf_damping, room_scale, wet_gain, effect_percent, hp_freq, lp_freq, order,
                 stereo_depth, pre_delay):
-        super().__init__(path, signal, n_fft, window_size, hop_length, peak)
+        super().__init__(path, signal, n_fft, window_size, hop_length, peak, audio_type)
         self.reverbance = reverbance
         self.hf_damping = hf_damping
         self.room_scale = room_scale
