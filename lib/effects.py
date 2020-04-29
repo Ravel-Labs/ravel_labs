@@ -25,19 +25,73 @@ class Signal:
 
 
 class EQSignal(Signal):
-    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type, bins, roll_percent, seconds,
-                rank_threshold, max_n, min_overlap_ratio, max_eq):
+    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type, 
+                rank_threshold, max_n, max_eq):
         super().__init__(path, signal, n_fft, window_size, hop_length, peak, audio_type)
-        self.bins = bins
-        self.roll_percent = roll_percent
-        self.seconds = seconds
-        self.chunk_fft_db = preprocessing.compute_chunk(self.norm_fft_db, self.window_size, self.sr, self.seconds)
-        self.rank = preprocessing.compute_rank(self.chunk_fft_db)
-        self.sparse_vec = preprocessing.compute_sparsity(self.rank, self.num_bins)
+        self.fft_db_avg = np.mean(self.fft_db, axis=1)
+        self.rank = preprocessing.rank_signal_1d(self.fft_db_avg)
         self.rank_threshold = rank_threshold
+        self.masker_rank_vec = np.where(self.rank > self.rank_threshold, 1, 0)
+        self.maskee_rank_vec = np.where(self.rank <= self.rank_threshold, 1, 0)
         self.max_n = max_n
-        self.min_overlap_ratio = min_overlap_ratio
         self.max_eq = max_eq
+
+    def compute_mask(self, signal):
+        mask_ab = (self.masker_rank_vec * signal.maskee_rank_vec) * (self.fft_db_avg - signal.fft_db_avg)
+        return mask_ab
+
+    def eq_params(self, signals):
+        num_signals = len(signals)
+        num_bins = self.num_bins
+        max_n = self.max_n
+        sr = self.sr
+        max_eq = self.max_eq
+        mask = np.array([])
+        eq_info = []
+        for m in range(num_signals):
+            mask_ab = self.compute_mask(signals[m])
+            mask = np.append(mask, mask_ab, axis=0)
+        mask_m = np.zeros(num_bins)
+        for b in range(num_bins):
+            arr = mask[b::num_bins]
+            max_b = np.max(arr)
+            mask_m[b] = max_b
+        top_m = np.argsort(mask_m)[-max_n:]
+        top_m_max = mask_m[top_m].max()
+        idx = np.unravel_index(top_m, mask_m.shape)[0]
+        for x in idx:
+            freq_bin = x  * (sr / num_bins)
+            mask_val = mask_m[x]
+            if (mask_val > 0) and (freq_bin <= 20000) and (freq_bin >= 20):
+                mask_val_scaled = (mask_val / top_m_max) * max_eq
+                eq_type = 0
+                eq_info.append([freq_bin, mask_val_scaled, eq_type])
+        if self.audio_type == "vocal":
+            # logic for subtractive EQ with highpass and shelf EQ
+            eq_info.append([270, 5, 3]) # low shelf filter
+            eq_info.append([100, 0 , 1]) # highpass filter best practice
+        return eq_info
+
+    def equalization(self, eq_info, Q):
+        num_filters = len(eq_info)
+        y = self.signal
+        for i in range(num_filters):
+            freq = float(eq_info[i][0])
+            gain = float(eq_info[i][1])
+            eq_type = int(eq_info[i][2])
+            if eq_type == 0:
+                eq = AudioEffectsChain().equalizer(freq, Q, -gain)
+                y = eq(y)
+            elif eq_type == 1:
+                eq = AudioEffectsChain().highpass(freq)
+                y = eq(y)
+            elif eq_type == 2:
+                eq = AudioEffectsChain().lowpass(freq)
+                y = eq(y)
+            elif eq_type == 3:
+                eq = AudioEffectsChain().lowshelf(-gain, freq)
+        return y
+
 
     # def compute_energy_percent(self):
     #     total_energy = np.sum(self.chunk_fft_db)
@@ -57,82 +111,67 @@ class EQSignal(Signal):
     #     r_avg = np.mean(r_active)
     #     return r_avg
 
-    def compute_mask(self, signal, overlap_vec, num_overlaps):
-        soa_vec_i = preprocessing.sparse_overlap_avg(self.num_bins, self.chunk_fft_db, 
-                                                    self.sparse_vec, overlap_vec, num_overlaps)
-        soa_vec_j = preprocessing.sparse_overlap_avg(signal.num_bins, signal.chunk_fft_db, 
-                                                    signal.sparse_vec, overlap_vec, num_overlaps)
-        r_soa_vec_i = preprocessing.rank_soa_vec(soa_vec_i)
-        r_soa_vec_j = preprocessing.rank_soa_vec(soa_vec_j)
-        masker_vec_i = preprocessing.masker_rank_vec(r_soa_vec_i)
-        maskee_vec_j = preprocessing.maskee_rank_vec(r_soa_vec_j)
-        mask_ij = ((masker_vec_i * maskee_vec_j) * (soa_vec_i - soa_vec_j)).flatten()
-        m_f = np.concatenate((mask_ij[:, np.newaxis], self.freqs[:, np.newaxis]), axis=1)
-        return mask_ij      
+    # def compute_mask(self, signal, overlap_vec, num_overlaps):
+    #     soa_vec_i = preprocessing.sparse_overlap_avg(self.num_bins, self.chunk_fft_db, 
+    #                                                 self.sparse_vec, overlap_vec, num_overlaps)
+    #     soa_vec_j = preprocessing.sparse_overlap_avg(signal.num_bins, signal.chunk_fft_db, 
+    #                                                 signal.sparse_vec, overlap_vec, num_overlaps)
+    #     r_soa_vec_i = preprocessing.rank_soa_vec(soa_vec_i)
+    #     r_soa_vec_j = preprocessing.rank_soa_vec(soa_vec_j)
+    #     masker_vec_i = preprocessing.masker_rank_vec(r_soa_vec_i)
+    #     maskee_vec_j = preprocessing.maskee_rank_vec(r_soa_vec_j)
+    #     mask_ij = ((masker_vec_i * maskee_vec_j) * (soa_vec_i - soa_vec_j)).flatten()
+    #     m_f = np.concatenate((mask_ij[:, np.newaxis], self.freqs[:, np.newaxis]), axis=1)
+    #     return mask_ij 
 
-    def eq_params(self, signals):
-        num_signals = len(signals)
-        num_bins = self.num_bins
-        max_n = self.max_n
-        sr = self.sr
-        max_eq = self.max_eq
-        for i in range(num_signals):
-            # mask = np.empty(shape=[0, 2])
-            mask = np.array([])
-            eq_info = []
-            overlap_vec, num_overlaps, overlap_ratio = preprocessing.overlap(self.sparse_vec, signals[i].sparse_vec)
-            if (overlap_ratio > self.min_overlap_ratio):
-                mask_ij = self.compute_mask(signals[i], overlap_vec, num_overlaps)
-                # m_f = np.concatenate((mask_ij[:, np.newaxis], signals[i].freqs[:, np.newaxis]), axis=1)
-                # mask = np.append(mask, m_f, axis=0)
-                mask = np.append(mask, mask_ij, axis=0)
-            else:
-                mask_ij = 0
-        mask_m = np.zeros(num_bins)
-        for b in range(num_bins):
-            # arr = mask[b::num_bins, :]
-            arr = mask[b::num_bins]
-            # max_b, _ = np.max(arr, axis=0)
-            max_b = np.max(arr)
-            mask_m[b] = max_b
-        top_m = np.argsort(mask_m)[-max_n:]
-        top_m_max = mask_m[top_m].max()
-        idx = np.unravel_index(top_m, mask_m.shape)[0]
-        for x in idx:
-            freq_bin = x  * (sr / num_bins)
-            mask_val = mask_m[x]
-            if (mask_val > 0) and (freq_bin <= 20000) and (freq_bin >= 20):
-                mask_val_scaled = (mask_val / top_m_max) * max_eq
-                eq_type = 0
-                eq_info.append([freq_bin, mask_val_scaled, eq_type])
-        if self.audio_type == "vocal":
-            # logic for subtractive EQ with highpass and shelf EQ
-            q_info.append([None])
-            eq_info.append([None])
-        # rolloff = self.compute_rolloff()
-        # energy_percent = self.compute_energy_percent()
-        # eq_info.append([rolloff, 0.71, 2])
-        # if energy_percent is not None:
-        #     eq_info.append([energy_percent, 0.71, 1])
-        return eq_info
+        
 
-    def equalization(self, eq_info, Q):
-        num_filters = len(eq_info)
-        y = self.signal
-        for i in range(num_filters):
-            freq = float(eq_info[i][0])
-            gain = float(eq_info[i][1])
-            eq_type = int(eq_info[i][2])
-            if eq_type == 0:
-                eq = AudioEffectsChain().equalizer(freq, Q, gain)
-                y = eq(y)
-            elif eq_type == 1:
-                eq = AudioEffectsChain().highpass(freq)
-                y = eq(y)
-            elif eq_type == 2:
-                eq = AudioEffectsChain().lowpass(freq)
-                y = eq(y)
-        return y
+
+    # def eq_params(self, signals):
+    #     num_signals = len(signals)
+    #     num_bins = self.num_bins
+    #     max_n = self.max_n
+    #     sr = self.sr
+    #     max_eq = self.max_eq
+    #     for i in range(num_signals):
+    #         # mask = np.empty(shape=[0, 2])
+    #         mask = np.array([])
+    #         eq_info = []
+    #         overlap_vec, num_overlaps, overlap_ratio = preprocessing.overlap(self.sparse_vec, signals[i].sparse_vec)
+    #         if (overlap_ratio > self.min_overlap_ratio):
+    #             mask_ij = self.compute_mask(signals[i], overlap_vec, num_overlaps)
+    #             # m_f = np.concatenate((mask_ij[:, np.newaxis], signals[i].freqs[:, np.newaxis]), axis=1)
+    #             # mask = np.append(mask, m_f, axis=0)
+    #             mask = np.append(mask, mask_ij, axis=0)
+    #         else:
+    #             mask_ij = 0
+    #     mask_m = np.zeros(num_bins)
+    #     for b in range(num_bins):
+    #         # arr = mask[b::num_bins, :]
+    #         arr = mask[b::num_bins]
+    #         # max_b, _ = np.max(arr, axis=0)
+    #         max_b = np.max(arr)
+    #         mask_m[b] = max_b
+    #     top_m = np.argsort(mask_m)[-max_n:]
+    #     top_m_max = mask_m[top_m].max()
+    #     idx = np.unravel_index(top_m, mask_m.shape)[0]
+    #     for x in idx:
+    #         freq_bin = x  * (sr / num_bins)
+    #         mask_val = mask_m[x]
+    #         if (mask_val > 0) and (freq_bin <= 20000) and (freq_bin >= 20):
+    #             mask_val_scaled = (mask_val / top_m_max) * max_eq
+    #             eq_type = 0
+    #             eq_info.append([freq_bin, mask_val_scaled, eq_type])
+    #     if self.audio_type == "vocal":
+    #         # logic for subtractive EQ with highpass and shelf EQ
+    #         eq_info.append([None])
+    #         eq_info.append([None])
+    #     # rolloff = self.compute_rolloff()
+    #     # energy_percent = self.compute_energy_percent()
+    #     # eq_info.append([rolloff, 0.71, 2])
+    #     # if energy_percent is not None:
+    #     #     eq_info.append([energy_percent, 0.71, 1])
+    #     return eq_info
 
 
 class CompressSignal(Signal):
