@@ -293,26 +293,34 @@ def lf_avg(signals, order, cutoff, sr):
         sum += total
     return sum / 4
 
+# def loudness(x, decay):
+#     N = x.shape[0]
+#     e_y = np.zeros(2)
+#     L_m = np.zeros(x.shape)
+#     sum_x = abs(x[0]**2)
+#     elems = 1
+#     mean_x = sum_x / elems
+#     e_x = math.sqrt(mean_x)
+#     e_y[0] = (1-decay) * e_x
+#     e_y[1] = ema(e_x, e_y[0], decay)
+#     L_m[0] = 0.691 * (10 * math.log10(e_y[1]+1e-14))
+#     e_y[0] = e_y[1]
+#     for n in range(1, N):
+#         sum_x+=abs(x[n]**2)
+#         elems=n+1
+#         mean_x = sum_x / elems
+#         e_x = math.sqrt(mean_x)
+#         e_y[1] = ema(e_x, e_y[0], decay)
+#         L_m[n] = 0.691 * (10 * math.log10(e_y[1]+1e-14))
+#         e_y[0] = e_y[1]
+#     return L_m
+
 def loudness(x, decay):
-    N = x.shape[0]
-    e_y = np.zeros(2)
-    L_m = np.zeros(x.shape)
-    sum_x = abs(x[0]**2)
-    elems = 1
-    mean_x = sum_x / elems
-    e_x = math.sqrt(mean_x)
-    e_y[0] = (1-decay) * e_x
-    e_y[1] = ema(e_x, e_y[0], decay)
-    L_m[0] = 0.691 * (10 * math.log10(e_y[1]+1e-14))
-    e_y[0] = e_y[1]
-    for n in range(1, N):
-        sum_x+=abs(x[n]**2)
-        elems=n+1
-        mean_x = sum_x / elems
-        e_x = math.sqrt(mean_x)
-        e_y[1] = ema(e_x, e_y[0], decay)
-        L_m[n] = 0.691 * (10 * math.log10(e_y[1]+1e-14))
-        e_y[0] = e_y[1]
+    cum_sum = np.cumsum(np.abs(x)**2)
+    count = np.arange(1, x.shape[0]+1)
+    energy = cum_sum / count
+    ema_y = lfilter([1-decay], [1, decay], energy)
+    L_m = 0.691 * (10 * np.log10(ema_y+1e-14))
     return L_m
 
 def low_pass(signal, order, cutoff, sr):

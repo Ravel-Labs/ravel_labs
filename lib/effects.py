@@ -242,6 +242,12 @@ class FaderSignal(Signal):
         for n in range(num_segments):
             L_m[step*sr*n: step*sr*(n+1)] = preprocessing.loudness(x_norm[step*sr*n: step*sr*(n+1)], decay)
         L_m[step*sr*(n+1):] = preprocessing.loudness(x_norm[step*sr*(n+1):], decay)
+        # ind = np.where(~np.isnan(L_m))[0] # temp fix until figuring out why function returns NaN values
+        # first, last = ind[0], ind[-1]
+        # L_m[:first] = L_m[first]
+        # L_m[last + 1:] = L_m[last]
+        mask = np.isnan(L_m)
+        L_m[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask), L_m[~mask])
         return L_m
 
     def compute_fader(self, L_av, L2):
@@ -422,7 +428,11 @@ class SignalAggregator:
                  for i in range(len(channels))]
         gains = [np.where(gain < 1, 0, 1) for gain in gains]
         gain_val = np.array(gains).sum(axis=0)
-        L_c = np.array(channels).sum(axis=0)
-        L_av = np.where(gain_val > 0, L_c / gain_val, 0)
+        L_g = [channel * gain for channel, gain in zip(channels, gains)] 
+        L_c = np.array(L_g).sum(axis=0)
+        # L_av = np.where(gain_val > 0, L_c / gain_val, -50)
+        L_av = np.ones(gain_val.shape[0]) * -50
+        np.divide(L_c, gain_val, out=L_av, where=gain_val != 0)
+        return L_av
         # apply ema filter
         return L_av
