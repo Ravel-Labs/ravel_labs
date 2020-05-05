@@ -1,8 +1,10 @@
 import lib.preprocessing as preprocessing
-from pyo import *
-from pysndfx import AudioEffectsChain
 import librosa
 import numpy as np
+import pyloudnorm as pyln
+from pysndfx import AudioEffectsChain
+from scipy.io.wavfile import write
+
 
 class Signal:
     def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type):
@@ -236,6 +238,9 @@ class PanSignal(Signal):
 
 
     def pan(self, P):
+        # quick fix - should be done from the signal aggregator function
+        if self.audio_type == "vocal":
+            P = 0.5
         left = np.cos(P * np.pi) * self.signal
         right = np.sin(P * np.pi) * self.signal
         return np.dstack((left,right))[0]
@@ -374,3 +379,37 @@ class SignalAggregator:
         return L_av
         # apply ema filter
         return L_av
+
+
+class Mixer:
+    def __init__(self, signals, output_path, sr):
+        self.signals = signals
+        self.output_path = output_path
+        self.sr = sr
+
+    def mix(self): return np.sum(signals, axis=0)
+
+    def output_wav(self, mixed_file):
+        write(self.output_path, self.sr, mixed_file)
+
+
+class Track:
+    def __init__(self, track, sr):
+        self.track = track
+        self.sr = sr
+
+    def calculate_peak(self):
+        peak = self.track.max()
+        peak_db = librosa.amplitude_to_db(peak)
+        return peak_db
+
+    def calculate loudness(self):
+        meter = pyln.Meter(self.sr)
+        loudness = meter.integrated_loudness(self.track)
+        return loudness
+
+    def calculate_rms(self):
+        rms_frame = librosa.feature.rmse(self.track)
+        rms = np.mean(rms_frame, axis=1)
+        rms_db = librosa.amplitude_to_db(rms)
+        return rms_db
