@@ -124,55 +124,6 @@ class EQSignal(Signal):
     #     m_f = np.concatenate((mask_ij[:, np.newaxis], self.freqs[:, np.newaxis]), axis=1)
     #     return mask_ij 
 
-        
-
-
-    # def eq_params(self, signals):
-    #     num_signals = len(signals)
-    #     num_bins = self.num_bins
-    #     max_n = self.max_n
-    #     sr = self.sr
-    #     max_eq = self.max_eq
-    #     for i in range(num_signals):
-    #         # mask = np.empty(shape=[0, 2])
-    #         mask = np.array([])
-    #         eq_info = []
-    #         overlap_vec, num_overlaps, overlap_ratio = preprocessing.overlap(self.sparse_vec, signals[i].sparse_vec)
-    #         if (overlap_ratio > self.min_overlap_ratio):
-    #             mask_ij = self.compute_mask(signals[i], overlap_vec, num_overlaps)
-    #             # m_f = np.concatenate((mask_ij[:, np.newaxis], signals[i].freqs[:, np.newaxis]), axis=1)
-    #             # mask = np.append(mask, m_f, axis=0)
-    #             mask = np.append(mask, mask_ij, axis=0)
-    #         else:
-    #             mask_ij = 0
-    #     mask_m = np.zeros(num_bins)
-    #     for b in range(num_bins):
-    #         # arr = mask[b::num_bins, :]
-    #         arr = mask[b::num_bins]
-    #         # max_b, _ = np.max(arr, axis=0)
-    #         max_b = np.max(arr)
-    #         mask_m[b] = max_b
-    #     top_m = np.argsort(mask_m)[-max_n:]
-    #     top_m_max = mask_m[top_m].max()
-    #     idx = np.unravel_index(top_m, mask_m.shape)[0]
-    #     for x in idx:
-    #         freq_bin = x  * (sr / num_bins)
-    #         mask_val = mask_m[x]
-    #         if (mask_val > 0) and (freq_bin <= 20000) and (freq_bin >= 20):
-    #             mask_val_scaled = (mask_val / top_m_max) * max_eq
-    #             eq_type = 0
-    #             eq_info.append([freq_bin, mask_val_scaled, eq_type])
-    #     if self.audio_type == "vocal":
-    #         # logic for subtractive EQ with highpass and shelf EQ
-    #         eq_info.append([None])
-    #         eq_info.append([None])
-    #     # rolloff = self.compute_rolloff()
-    #     # energy_percent = self.compute_energy_percent()
-    #     # eq_info.append([rolloff, 0.71, 2])
-    #     # if energy_percent is not None:
-    #     #     eq_info.append([energy_percent, 0.71, 1])
-    #     return eq_info
-
 
 class CompressSignal(Signal):
     def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type, 
@@ -224,11 +175,13 @@ class CompressSignal(Signal):
 
 class FaderSignal(Signal):
     def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type,
-                decay, step, lead, B):
+                decay, step, lead, max_fader, min_fader, B):
         super().__init__(path, signal, n_fft, window_size, hop_length, peak, audio_type)
         self.decay = decay
         self.step = step
         self.lead = lead
+        self.max_fader = max_fader
+        self.min_fader = min_fader
         self.B = B
     
     def full_loudness(self):
@@ -256,6 +209,9 @@ class FaderSignal(Signal):
             F_m[n] = 10 ** ((L_av[n] - L2[n]) / 20)
         if self.lead == True:
             F_m[n] = F_m[n] * 10 ** (self.B/20)
+
+        F_m = np.where(F_m > self.max_fader, self.max_fader, F_m)
+        F_m = np.where(F_m < self.min_fader, self.min_fader, F_m)
         return F_m
 
     def fader(self, fader_output): return self.signal * fader_output
@@ -335,6 +291,7 @@ class DeEsserSignal(Signal):
         return gain
 
     def deesser(self, gain):
+        y_out = np.zeros(self.signal.shape)
         frame_sig = librosa.util.frame(self.signal, frame_length=self.n_fft, hop_length=self.hop_length)
         M, N = frame_sig.shape[0], frame_sig.shape[1]
         # fix padding that makes these dimensions not always aligned via stft
@@ -342,7 +299,10 @@ class DeEsserSignal(Signal):
         y = np.zeros((M, N))
         for m in range(M):
             y[m] = gain[m] * frame_sig[m]
-        return y.flatten('F')
+        y = y.flatten('F')
+        n = y.shape[0]
+        y_out[:n] = y
+        return y_out
 
 
 class ReverbSignal(Signal):
@@ -371,28 +331,6 @@ class ReverbSignal(Signal):
         y_out = self.dry_signal + y_fx
         return y_out
 
-
-
-class Converter:
-    def __init__(self, signal):
-        self.signal = signal
-        self.buffer_size = signal.shape[0]
-
-    def numpy_to_pyo(self, s):
-        s.start()
-        t = DataTable(size=self.buffer_size)
-        osc = TableRead(t, freq=t.getRate())
-        arr = np.asarray(t.getBuffer())
-        pyo_x = process(t, self.signal, osc)
-        return pyo_x
-
-    def pyo_to_numpy(self, out, s):
-        t = DataTable(size=self.buffer_size)
-        b = TableRec(out, t, 0.01).play()
-        tf = TrigFunc(b["trig"], function=done, arg=t)
-        numpy_x = done(t)
-        s.shutdown()
-        return numpy_x
 
 class SignalAggregator:
     '''Computes all of the aggregated stats for each effect'''
@@ -431,7 +369,7 @@ class SignalAggregator:
         L_g = [channel * gain for channel, gain in zip(channels, gains)] 
         L_c = np.array(L_g).sum(axis=0)
         # L_av = np.where(gain_val > 0, L_c / gain_val, -50)
-        L_av = np.ones(gain_val.shape[0]) * -50
+        L_av = np.ones(gain_val.shape[0]) * -30
         np.divide(L_c, gain_val, out=L_av, where=gain_val != 0)
         return L_av
         # apply ema filter
