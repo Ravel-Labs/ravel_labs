@@ -92,6 +92,9 @@ class EQSignal(Signal):
                 y = eq(y)
             elif eq_type == 3:
                 eq = AudioEffectsChain().lowshelf(-gain, freq)
+
+            elif eq_type == 4:
+                eq = AudioEffectsChain().highshelf(gain, freq)
         return y
 
 
@@ -403,7 +406,7 @@ class Track:
         peak_db = librosa.amplitude_to_db(peak)
         return peak_db
 
-    def calculate loudness(self):
+    def calculate_loudness(self):
         meter = pyln.Meter(self.sr)
         loudness = meter.integrated_loudness(self.track)
         return loudness
