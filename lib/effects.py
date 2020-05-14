@@ -390,9 +390,11 @@ class Mixer:
         self.output_path = output_path
         self.sr = sr
 
-    def mix(self): return np.sum(signals, axis=0)
+    def mix(self): 
+        output = np.sum(self.signals, axis=0)
+        return output.astype(np.float32)
 
-    def output_wav(self, mixed_file):
+    def output_wav(self, mixed_file): 
         write(self.output_path, self.sr, mixed_file)
 
 
@@ -403,8 +405,8 @@ class Track:
 
     def calculate_peak(self):
         peak = self.track.max()
-        peak_db = librosa.amplitude_to_db(peak)
-        return peak_db
+        peak_db = librosa.amplitude_to_db([peak])
+        return peak_db[0]
 
     def calculate_loudness(self):
         meter = pyln.Meter(self.sr)
@@ -412,7 +414,7 @@ class Track:
         return loudness
 
     def calculate_rms(self):
-        rms_frame = librosa.feature.rmse(self.track)
+        rms_frame = librosa.feature.rms(self.track)
         rms = np.mean(rms_frame, axis=1)
         rms_db = librosa.amplitude_to_db(rms)
-        return rms_db
+        return rms_db[0]
