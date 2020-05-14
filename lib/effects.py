@@ -313,6 +313,12 @@ class DeEsserSignal(Signal):
         return y_out
 
 
+class PitchCorrectionSignal(Signal):
+    def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type):
+        super().__init__(path, signal, n_fft, window_size, hop_length, peak, audio_type)
+        pass
+
+
 class ReverbSignal(Signal):
     def __init__(self, path, signal, n_fft, window_size, hop_length, peak, audio_type,
                 reverbance, hf_damping, room_scale, wet_gain, effect_percent, hp_freq, lp_freq, order,

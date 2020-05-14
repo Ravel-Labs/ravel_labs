@@ -280,6 +280,20 @@ def h_lp(fc, sr, Q):
     b_2 = k**2 * k_1
     return np.array([b_0, b_1, b_2]), np.array([a_0, a_1, a_2])
 
+def hps(X, order, sr, f_min):
+    f = np.zeros(X.shape[1])
+    k_len = int((X.shape[0]) - 1 / order)
+    hps = X[np.arange(0, k_len), :]
+    k_min = int(round(f_min / sr * 2 * (X.shape[0] - 1)))
+
+    for j in range(1, order):
+        X_d = X[::(j+1), :]
+        hps *= X_d[np.arange(0, k_len), :]
+
+    f = np.argmax(hps[np.arange(k_min, hps.shape[0])], axis=0)
+    f = (f + k_min) / (X.shape[0] - 1) * sr / 2
+    return f
+
 def lf_avg(signals, order, cutoff, sr):
     sum = 0  
     for sig in signals:
