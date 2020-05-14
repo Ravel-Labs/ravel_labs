@@ -114,9 +114,7 @@ def compute_makeup_gain(x_in, x_out, rate):
     loudness_out = meter.integrated_loudness(x_out)
     return loudness_in - loudness_out
 
-def compute_norm_fft_db(db_signal, peak, n_fft, window_size, hop_length):
-    x_norm_db = normalize(db_signal, peak)
-    x_norm = librosa.db_to_amplitude(x_norm_db)
+def compute_norm_fft_db(x_norm, n_fft, window_size, hop_length):
     norm_fft = np.abs(librosa.core.stft(x_norm, n_fft=n_fft, 
                                     win_length=window_size, hop_length=hop_length))
     norm_fft_db = librosa.amplitude_to_db(norm_fft)
@@ -295,26 +293,34 @@ def lf_avg(signals, order, cutoff, sr):
         sum += total
     return sum / 4
 
+# def loudness(x, decay):
+#     N = x.shape[0]
+#     e_y = np.zeros(2)
+#     L_m = np.zeros(x.shape)
+#     sum_x = abs(x[0]**2)
+#     elems = 1
+#     mean_x = sum_x / elems
+#     e_x = math.sqrt(mean_x)
+#     e_y[0] = (1-decay) * e_x
+#     e_y[1] = ema(e_x, e_y[0], decay)
+#     L_m[0] = 0.691 * (10 * math.log10(e_y[1]+1e-14))
+#     e_y[0] = e_y[1]
+#     for n in range(1, N):
+#         sum_x+=abs(x[n]**2)
+#         elems=n+1
+#         mean_x = sum_x / elems
+#         e_x = math.sqrt(mean_x)
+#         e_y[1] = ema(e_x, e_y[0], decay)
+#         L_m[n] = 0.691 * (10 * math.log10(e_y[1]+1e-14))
+#         e_y[0] = e_y[1]
+#     return L_m
+
 def loudness(x, decay):
-    N = x.shape[0]
-    e_y = np.zeros(2)
-    L_m = np.zeros(x.shape)
-    sum_x = abs(x[0]**2)
-    elems = 1
-    mean_x = sum_x / elems
-    e_x = math.sqrt(mean_x)
-    e_y[0] = (1-decay) * e_x
-    e_y[1] = ema(e_x, e_y[0], decay)
-    L_m[0] = 0.691 * (10 * math.log10(e_y[1]+1e-14))
-    e_y[0] = e_y[1]
-    for n in range(1, N):
-        sum_x+=abs(x[n]**2)
-        elems=n+1
-        mean_x = sum_x / elems
-        e_x = math.sqrt(mean_x)
-        e_y[1] = ema(e_x, e_y[0], decay)
-        L_m[n] = 0.691 * (10 * math.log10(e_y[1]+1e-14))
-        e_y[0] = e_y[1]
+    cum_sum = np.cumsum(np.abs(x)**2)
+    count = np.arange(1, x.shape[0]+1)
+    energy = cum_sum / count
+    ema_y = lfilter([1-decay], [1, decay], energy)
+    L_m = 0.691 * (10 * np.log10(ema_y+1e-14))
     return L_m
 
 def low_pass(signal, order, cutoff, sr):
