@@ -145,6 +145,31 @@ def compute_sparsity(rank, num_bins):
             sparse_vec[0, i] = 1
     return sparse_vec
 
+def compute_ste(x, window_size, hop_length):
+    frames = librosa.util.frame(x, frame_length=window_size, hop_length=hop_length)
+    E = np.zeros(frames.shape[1])
+    win = scipy.signal.get_window('hamming', window_size)
+    win = win / len(win)
+    for n in range(E.shape[0]):
+        c = np.sum(scipy.signal.convolve(frames[:, n]**2, win**2, mode="same"), axis=0)
+        E[n] = c
+    return E
+
+def compute_voiced_unvoiced(x, window_size, hop_length, ste_thresh, zcr_thresh):
+    ste = compute_ste(x, window_size, hop_length)
+    zcr = compute_zcr(x, window_size, hop_length)
+    if ste.shape == zcr.shape:
+        v_unv = np.zeros(ste.shape)
+    else:
+        return None
+    v_unv = np.where((zcr < zcr_thresh) & (ste > ste_thresh), 1, 0)
+    return v_unv
+
+def compute_zcr(x, window_size, hop_length):
+    zcr = librosa.feature.zero_crossing_rate(x, frame_length=window_size, 
+                                                hop_length=hop_length, center=False)
+    return np.squeeze(zcr)
+
 def crest_attack_release(attack_max, release_max, crest_factor_sq):
     attack = (2 * attack_max) / crest_factor_sq
     release = (2 * release_max) / crest_factor_sq - attack
@@ -282,14 +307,12 @@ def h_lp(fc, sr, Q):
 
 def hps(X, order, sr, f_min):
     f = np.zeros(X.shape[1])
-    k_len = int((X.shape[0]) - 1 / order)
+    k_len = int((X.shape[0] - 1) / order)
     hps = X[np.arange(0, k_len), :]
     k_min = int(round(f_min / sr * 2 * (X.shape[0] - 1)))
-
     for j in range(1, order):
         X_d = X[::(j+1), :]
         hps *= X_d[np.arange(0, k_len), :]
-
     f = np.argmax(hps[np.arange(k_min, hps.shape[0])], axis=0)
     f = (f + k_min) / (X.shape[0] - 1) * sr / 2
     return f
@@ -509,6 +532,15 @@ def peak_filter_bank(signal, cutoffs, sr, order, btype, window_step, num_steps):
     freq_counts = np.unique(maxs, return_counts=True)
     max_idx = np.argmax(freq_counts[:][1])
     return cutoffs[max_idx]
+
+def pitch_deviation(pitches, freq):
+    idx = (np.abs(pitches - freq)).argmin() 
+    return pitches[idx] - freq
+
+def pitch_map(A4=440, num_pitches=88):
+    notes = np.arange(0, num_pitches)
+    pitch_to_freq = A4 * (2 ** (num_pitches/12))
+    return pitch_to_freq
 
 def preprocess_pll(x, high_cutoff, low_cutoff, sr, high_order, low_order, x_env):
     x_low = apply_bfilter(x, cutoff=low_cutoff, sr=sr, order=low_order, btype='low')
