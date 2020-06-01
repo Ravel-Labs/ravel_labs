@@ -10,154 +10,399 @@ from scipy.stats import rankdata
 
 
 def apply_bfilter(signal, cutoff, sr, order, btype):
+    """
+    Apply a butterworth filter to an audio signal.
+
+    Parameters
+    ----------
+    signal: np.ndarray [shape=(n,)], real valued
+        input signal
+
+    cutoff: array_like
+        the critical frequency or frequencies for butterworth filter
+
+    sr: float
+        sample rate
+
+    order: int
+        the order of the butterworth filter
+
+    btype: {‘lowpass’, ‘highpass’, ‘bandpass’, ‘bandstop’}
+        the type of filter
+
+
+    Returns
+    ----------
+    y: np.ndarray [shape=(n,)], real valued
+        output signal - signal after being filtered
+
+
+    """
     b, a = butter_filter(cutoff, sr, order, btype)
     y = lfilter(b, a, signal)
     return y
     
-def attack(attack_max, crest_factor_n2):
-    return (2*attack_max) / crest_factor_n2
+# def attack(attack_max, crest_factor_n2):
+#     return (2*attack_max) / crest_factor_n2
 
-def audio_sparsity(r_y, min_y):
-    sparse_vec = np.zeros((1, r_y.shape[1]))
-    for i in range(r_y.shape[1]):
-        mu = np.mean(r_y.T[i])
-        if mu == min_y:
-            sparse_vec[0, i] = 0
-        else:
-            sparse_vec[0, i] = 1
-    return sparse_vec
+# def audio_sparsity(r_y, min_y):
+#     sparse_vec = np.zeros((1, r_y.shape[1]))
+#     for i in range(r_y.shape[1]):
+#         mu = np.mean(r_y.T[i])
+#         if mu == min_y:
+#             sparse_vec[0, i] = 0
+#         else:
+#             sparse_vec[0, i] = 1
+#     return sparse_vec
 
 def butter_filter(cutoff, sr, order, btype):
+    """
+    Butterworth filter based on sample rate, order, and btype
+
+    Parameters
+    ----------
+    cutoff: array_like
+        the critical frequency or frequencies for butterworth filter
+
+    sr: float
+        sample rate
+
+    order: int
+        the order of the butterworth filter
+
+    btype: {‘lowpass’, ‘highpass’, ‘bandpass’, ‘bandstop’}
+        the type of filter
+
+    Returns
+    ----------
+    b, a: np.ndarray, np.ndarray
+        numerator (b) and denominator (a) polynomials of the 
+        Butterworth filter
+    """
     nyq = 0.5 * sr
     normal_cutoff = cutoff / nyq
     b, a = butter(order, normal_cutoff, btype=btype, analog=False)
     return b, a
 
-def butter_bandpass(lowcut, highcut, fs, order):
-    nyq = 0.5 * fs
-    low = lowcut / nyq
-    high = highcut / nyq
-    b, a = butter(order, [low, high], btype='band', analog=False)
-    return b, a
+# def butter_bandpass(lowcut, highcut, fs, order):
+#     nyq = 0.5 * fs
+#     low = lowcut / nyq
+#     high = highcut / nyq
+#     b, a = butter(order, [low, high], btype='band', analog=False)
+#     return b, a
 
 def calc_f_osc(x_d, b, a): return lfilter([1+b[0], b[1], b[2]], a, x_d)
 
 def calc_f0(x_d, b, a): return lfilter(b, a, x_d) * 2
 
-def cf_avg(signals):
-    sum = 0
-    for sig in signals:
-        cfs = cf(sig)
-        sum += cfs
-    return sum / len(signals)
+# def cf_avg(signals):
+#     sum = 0
+#     for sig in signals:
+#         cfs = cf(sig)
+#         sum += cfs
+#     return sum / len(signals)
 
-def compression_parameters(path, files, time_constant, order, cutoff, sr, std, attack_max, release_max):
-    compress_info = []
-    signal_paths = [os.path.join(path, files[i]) for i in range(len(files))]
-    signals = []
-    for sig in signal_paths:
-        y, _ = librosa.load(sig, sr=sr)
-        signals.append(y)
-    cfa = cf_avg(signals)
-    lfa = lf_avg(signals, order, cutoff, sr)
-    for i, signal in enumerate(signals):
-        w_p, cf = wp(signal, cfa, std)
-        w_f = lf_weighting(signal, lfa, order, cutoff, sr)
-        rms = librosa.feature.rms(signal, frame_length=1024, hop_length=512)
-        rms_db = np.mean(librosa.amplitude_to_db(rms))
-        r = float(ratio(w_f, w_p))
-        t = float(threshold(rms_db, w_p))
-        kw = float(knee_width(t))
-        a = float(attack(attack_max, cf**2))
-        rel = float(release(release_max, cf**2))
-        compress_info.append({signal_paths[i]:[t, r, a, rel, kw]})
-    return compress_info
+# def compression_parameters(path, files, time_constant, order, cutoff, 
+#                             sr, std, attack_max, release_max):
+#     compress_info = []
+#     signal_paths = [os.path.join(path, files[i]) 
+#                     for i in range(len(files))]
+#     signals = []
+#     for sig in signal_paths:
+#         y, _ = librosa.load(sig, sr=sr)
+#         signals.append(y)
+#     cfa = cf_avg(signals)
+#     lfa = lf_avg(signals, order, cutoff, sr)
+#     for i, signal in enumerate(signals):
+#         w_p, cf = wp(signal, cfa, std)
+#         w_f = lf_weighting(signal, lfa, order, cutoff, sr)
+#         rms = librosa.feature.rms(signal, frame_length=1024,
+#                                     hop_length=512)
+#         rms_db = np.mean(librosa.amplitude_to_db(rms))
+#         r = float(ratio(w_f, w_p))
+#         t = float(threshold(rms_db, w_p))
+#         kw = float(knee_width(t))
+#         a = float(attack(attack_max, cf**2))
+#         rel = float(release(release_max, cf**2))
+#         compress_info.append({signal_paths[i]:[t, r, a, rel, kw]})
+#     return compress_info
 
-def compute_a0(f): return 6.5 * np.exp((-0.6*((f/1000)-3.3))**2) - 10**-3 * (f/1000)**4
+def compute_a0(f): 
+    return 6.5 * np.exp((-0.6*((f/1000)-3.3))**2) - 10**-3 * (f/1000)**4
 
-def compute_chunk(norm_fft_db, window_size, sr, seconds):
-    fft_length = norm_fft_db.shape[1]
-    num_freqs = norm_fft_db.shape[0]
-    chunk_size = int(np.ceil((1 / (window_size / sr)) * seconds))
-    total_chunks = int(np.ceil(fft_length / chunk_size))
-    avg_mat = np.zeros((num_freqs, total_chunks))
-    avg_vec = np.zeros((1, chunk_size))
-    for i in range(num_freqs):
-        for j in range(total_chunks):
-            if j > total_chunks - 1:
-                avg_vec = norm_fft_db[i][chunk_size * j:]
-                mu = np.mean(avg_vec)
-                avg_mat[i][j] = mu
-            avg_vec = norm_fft_db[i][chunk_size * j: chunk_size * (j+1)]
-            mu = np.mean(avg_vec)
-            avg_mat[i][j] = mu
-    return avg_mat
+# def compute_chunk(norm_fft_db, window_size, sr, seconds):
+#     fft_length = norm_fft_db.shape[1]
+#     num_freqs = norm_fft_db.shape[0]
+#     chunk_size = int(np.ceil((1 / (window_size / sr)) * seconds))
+#     total_chunks = int(np.ceil(fft_length / chunk_size))
+#     avg_mat = np.zeros((num_freqs, total_chunks))
+#     avg_vec = np.zeros((1, chunk_size))
+#     for i in range(num_freqs):
+#         for j in range(total_chunks):
+#             if j > total_chunks - 1:
+#                 avg_vec = norm_fft_db[i][chunk_size * j:]
+#                 mu = np.mean(avg_vec)
+#                 avg_mat[i][j] = mu
+#             avg_vec = norm_fft_db[i][chunk_size * j: chunk_size * (j+1)]
+#             mu = np.mean(avg_vec)
+#             avg_mat[i][j] = mu
+#     return avg_mat
 
-def compute_effect_signal(y, effect_percent, hp_freq, lp_freq, order, sr):
+def compute_effect_signal(y, effect_percent, hp_freq, lp_freq, 
+                            order, sr):
+    """
+    Creates an effect signal based on an effect percentage,
+    highpass and lowpass critical frequencies, filter order, and sample
+    rate.
+
+
+    Parameters
+    ----------
+    y: np.ndarray [shape=(n,)], real valued
+        input signal
+
+    effect_percent: float
+        percentage of input signal to be filtered for use of an audio
+        effect
+
+    hp_freqenecy: float
+        critical frequency for a highpass butterworth filter
+
+    lp_freq: float
+        critical frequency for a lowpass butterworth filter
+
+    order: int
+        the order of the butterworth filter
+
+    sr: float
+        sample rate
+
+    Returns
+    ----------
+    y_out: np.ndarray [shape=(n,)] real valued
+        output signal - percentage of input signal filtered by highpass
+        and lowpass
+
+
+    """
     effect_signal = y * effect_percent
     y_hp = apply_bfilter(effect_signal, hp_freq, sr, order, 'highpass')
     y_out = apply_bfilter(y_hp, lp_freq, sr, order, 'lowpass')
     return y_out
 
-def compute_gz(z): return np.where(z < 14, 1, 0.00012*z**4 - 0.0056*z**3 + 0.1*z**2 - 0.81*z + 3.51)
+# def compute_gz(z): 
+#     return np.where(z < 14, 1, 0.00012*z**4 - 0.0056*z**3 
+#                     + 0.1*z**2 - 0.81*z + 3.51)
 
 def compute_lfe(signal, order, cutoff, sr):
-    lf_x = low_pass(signal, order, cutoff, sr)
+    """
+    Returns low frequency weighting of an audio signal.
+
+    The low frequency weighting is used to describe the relative amount
+    of low frequency energy of an input signal.
+
+    Parameters
+    ----------
+    signal: np.ndarray [shape=(n,)], real valued
+        input signal
+
+    order: int
+        the order of the butterworth filter
+
+    cutoff: array_like
+        the critical frequency or frequencies for butterworth filter    
+
+    sr: float
+        sample rate
+
+    Returns
+    ----------
+    lfe: float
+        low frequency energy of input signal
+
+    """
+    lf_x = apply_bfilter(signal, cutoff, sr, order, 'lowpass')
     x_low = np.abs(librosa.core.stft(lf_x, n_fft=1024, hop_length=512))
     x = np.abs(librosa.core.stft(signal, n_fft=1024, hop_length=512))
-    lfe = np.sum(np.divide(x_low, x, out=np.zeros_like(x_low), where=x!=0))
+    lfe = np.sum(np.divide(x_low, x, out=np.zeros_like(x_low), 
+                where=x!=0))
     return lfe
 
-def compute_makeup_gain(x_in, x_out, rate):
-    meter = pyln.Meter(rate)
+def compute_makeup_gain(x_in, x_out, sr):
+    """
+    Computes the makeup gain for an audio signal after being compressed
+
+    Parameters
+    ----------
+
+    x_in: np.ndarray [shape=(n,)], real valued
+        input signal
+
+    x_out: np.ndarray [shape=(n,)], real valued
+        output signal after compression
+
+    sr: float
+        sample rate
+
+    Returns
+    ----------
+    makeup_gain: float
+        Amount of gain to be applied to output signal
+    """
+    meter = pyln.Meter(sr)
     loudness_in = meter.integrated_loudness(x_in)
     loudness_out = meter.integrated_loudness(x_out)
-    return loudness_in - loudness_out
+    makeup_gain = loudness_in - loudness_out
+    return makeup_gain
 
 def compute_norm_fft_db(x_norm, n_fft, window_size, hop_length):
+    """
+    Compute short-time fourier transform based on a normalized audio
+    signal with a decibel scale.
+
+    Parameters
+    ----------
+    x_norm: np.ndarray [shape=(n,)], real valued
+        input array normalized by target peak amplitude
+
+    n_fft: int > 0
+        length of the windowed signal after padding with zeros.
+
+    window_size: int <= n_fft
+        each frame of audio is windowed by `window()` of length 
+        `window_size` and then padded with zeros to match `n_fft`
+
+    hop_length: int > 0
+        number of audio samples between adjacent STFT columns
+
+    Returns
+    ----------
+    norm_fft_db: np.ndarray [shape=(n,)], real valued
+        normalized STFT of input signal on a decibel scale
+
+    """
     norm_fft = np.abs(librosa.core.stft(x_norm, n_fft=n_fft, 
                                     win_length=window_size, hop_length=hop_length))
     norm_fft_db = librosa.amplitude_to_db(norm_fft)
     return norm_fft_db
 
-def compute_Nz(critical_band_fft):
+def compute_Nz(critical_band_fft, critical_bands):
+    """
+    Computes loudness using the Bark Scale.
+    
+    The Bark scale is a psychoacoustical scale proposed by Eberhard 
+    Zwicker in 1961. The scale ranges from 1 to 24 and corresponds 
+    to the first 24 critical bands of hearing.
+
+    Parameters
+    ----------
+    critical_band_fft: np.ndarray [shape=(24, num_fft_frames)]
+        STFT summed across the 24 critical bands of hearing.
+
+    critical_bands: list
+        frequencies of critical bands of intensity
+
+    Returns
+    ----------
+    N: np.ndarray np.ndarray [shape=(24, n_fft_frames)]
+        loudness for each critical band across each frame of STFT
+    """
     num = critical_band_fft.shape[0]
     N = np.zeros(critical_band_fft.shape)
     for z in range(num):
-        a0_z = compute_a0(critical_band_fft[z][:])
-        N[z] = a0_z * critical_band_fft[z][:]
+        a0_z = compute_a0(critical_bands[z])
+        N[z] = (a0_z * critical_band_fft[z][:])**0.25
     return N
 
-def compute_rank(chunk_fft_db): 
-    a = np.zeros(chunk_fft_db.shape)
-    for row in range(chunk_fft_db.shape[1]):
-        a[:, row] = np.abs(rankdata(chunk_fft_db[:, row], method='min') - (chunk_fft_db.shape[0])) + 1
-    return a
+# def compute_rank(chunk_fft_db): 
+#     a = np.zeros(chunk_fft_db.shape)
+#     for row in range(chunk_fft_db.shape[1]):
+#         a[:, row] = np.abs(rankdata(chunk_fft_db[:, row], method='min') 
+#                     - (chunk_fft_db.shape[0])) + 1
+#     return a
 
-def compute_sparsity(rank, num_bins):
-    sparse_vec = np.zeros((1, rank.shape[1]))
-    min_val = num_bins
-    for i in range(rank.shape[1]):
-        mu = np.mean(rank.T[i])
-        if mu == min_val:
-            sparse_vec[0, i] = 0
-        else:
-            sparse_vec[0, i] = 1
-    return sparse_vec
+# def compute_sparsity(rank, num_bins):
+#     sparse_vec = np.zeros((1, rank.shape[1]))
+#     min_val = num_bins
+#     for i in range(rank.shape[1]):
+#         mu = np.mean(rank.T[i])
+#         if mu == min_val:
+#             sparse_vec[0, i] = 0
+#         else:
+#             sparse_vec[0, i] = 1
+#     return sparse_vec
 
-def compute_ste(x, window_size, hop_length):
-    frames = librosa.util.frame(x, frame_length=window_size, hop_length=hop_length)
+def compute_ste(y, window_size, hop_length):
+    """
+    Computes short-term energy of audio signal based on window size
+    and hop length.
+
+    Parameters
+    ----------
+    y: np.ndarray [shape=(n,)]
+        input signal
+
+    window_size: int <= n_fft
+        each frame of audio is windowed by `window()` of length 
+        `window_size` and then padded with zeros to match `n_fft`
+
+    hop_length: int > 0
+        eumber of audio samples between adjacent frames
+
+
+    Returns
+    ----------
+    E: np.ndarray [shape=(n_frames)], real valued
+        Short-term energy of each frame of audio signal according to
+        windowing by Hamming window.
+    """
+
+    frames = librosa.util.frame(y, frame_length=window_size, 
+                                hop_length=hop_length)
     E = np.zeros(frames.shape[1])
     win = scipy.signal.get_window('hamming', window_size)
     win = win / len(win)
     for n in range(E.shape[0]):
-        c = np.sum(scipy.signal.convolve(frames[:, n]**2, win**2, mode="same"), axis=0)
+        c = np.sum(scipy.signal.convolve(frames[:, n]**2, 
+                                        win**2, mode="same"), axis=0)
         E[n] = c
     return E
 
-def compute_voiced_unvoiced(x, window_size, hop_length, ste_thresh, zcr_thresh):
-    ste = compute_ste(x, window_size, hop_length)
-    zcr = compute_zcr(x, window_size, hop_length)
+def compute_voiced_unvoiced(y, window_size, hop_length, 
+                            ste_thresh, zcr_thresh):
+    """
+    Computes boolean array that details whether a frame is voiced or
+    unvoiced according to short-term energy and zero-crossing rate
+    thresholds.
+    
+    Parameters
+    ----------
+    y: np.ndarray [shape=(n,)], real valued
+        input signal
+
+    window_size: int <= n_fft
+        each frame of audio is windowed by `window()` of length 
+        `window_size` and then padded with zeros to match `n_fft`
+
+    hop_length: int > 0
+        number of audio samples between adjacent frames
+
+    ste_thresh: float
+        short-term energy threshold for classifying voiced and unvoiced
+        frames
+
+    zcr_thresh: float
+        zero-crossing rate threshold for classifying voiced and unvoiced
+        frames
+    
+    Returns
+    ----------
+    v_unv: np.ndarray [shape=(n_frames,)], boolean
+        array of boolean values for whether frame is voiced or unvoiced.
+
+    """
+    ste = compute_ste(y, window_size, hop_length)
+    zcr = compute_zcr(y, window_size, hop_length)
     if ste.shape == zcr.shape:
         v_unv = np.zeros(ste.shape)
     else:
@@ -165,28 +410,73 @@ def compute_voiced_unvoiced(x, window_size, hop_length, ste_thresh, zcr_thresh):
     v_unv = np.where((zcr < zcr_thresh) & (ste > ste_thresh), 1, 0)
     return v_unv
 
-def compute_zcr(x, window_size, hop_length):
-    zcr = librosa.feature.zero_crossing_rate(x, frame_length=window_size, 
+def compute_zcr(y, window_size, hop_length):
+    """
+    Compute zero-crossing rate according to window size and hop length.
+
+    Parameters
+    ----------
+
+    y: np.ndarray [shape=(n,)], real valued
+        input signal
+
+    window_size: int <= n_fft
+        each frame of audio is windowed by `window()` of length 
+        `window_size` and then padded with zeros to match `n_fft`
+
+    hop_length: int > 0
+        number of audio samples between adjacent frames
+
+    Returns
+    ----------
+    zcr: np.ndarray [shape(n_frames,)], float
+        zero-crossing rate
+
+    """
+
+    zcr = librosa.feature.zero_crossing_rate(y, frame_length=window_size, 
                                                 hop_length=hop_length, center=False)
-    return np.squeeze(zcr)
+    zcr = np.squeeze(zcr)
+    return zcr
 
-def crest_attack_release(attack_max, release_max, crest_factor_sq):
-    attack = (2 * attack_max) / crest_factor_sq
-    release = (2 * release_max) / crest_factor_sq - attack
-    return attack, release
+# def crest_attack_release(attack_max, release_max, crest_factor_sq):
+#     attack = (2 * attack_max) / crest_factor_sq
+#     release = (2 * release_max) / crest_factor_sq - attack
+#     return attack, release
 
-def crest_factor(peaks, rms): 
-    crest_factor = np.zeros(rms.shape)
-    crest_factor[0] = 0
-    crest_factor[1:] = peaks[1:] / rms[1:]
-    return np.sqrt(crest_factor)
+# def crest_factor(peaks, rms): 
+#     crest_factor = np.zeros(rms.shape)
+#     crest_factor[0] = 0
+#     crest_factor[1:] = peaks[1:] / rms[1:]
+#     return np.sqrt(crest_factor)
 
-def critical_band_sum(bark_mat, bark_idx, N):
-    M = bark_mat.shape[1]
+def critical_band_sum(fft, bark_idx, N):
+    """
+    Compute energy across Bark scale critical bands.
+    
+    Parameters
+    ----------
+    fft: np.ndarray [shape=(1 / n_fft/2, n_frames)]
+        short-time fourier transform of an input signal
+
+    bark_idx: list
+        indices of fft that map to each critical band
+
+    N: int > 0
+        number of critical bands
+
+    Returns
+    ----------
+    c_band_sum: np.ndarray((N, M))
+        condensed version of STFT that sums each frequency bin over the
+        critical bands of hearing.
+
+    """
+    M = fft.shape[1]
     c_band_sum = np.zeros((N, M))
     for n in range(N):
-        if bark_mat[n].size != 0:
-            c_band_sum[n] = np.sum(bark_mat[bark_idx[n]], axis=0)[:M]
+        if fft[n].size != 0:
+            c_band_sum[n] = np.sum(fft[bark_idx[n]], axis=0)[:M]
         else:
             c_band_sum[n] = 0
     return c_band_sum
@@ -360,12 +650,12 @@ def loudness(x, decay):
     L_m = 0.691 * (10 * np.log10(ema_y+1e-14))
     return L_m
 
-def low_pass(signal, order, cutoff, sr):
-    nyq = sr * 0.5
-    normal_cutoff = cutoff / nyq
-    b,a = scipy.signal.butter(order, normal_cutoff)
-    y = scipy.signal.lfilter(b, a, signal)
-    return y
+# def low_pass(signal, order, cutoff, sr):
+#     nyq = sr * 0.5
+#     normal_cutoff = cutoff / nyq
+#     b,a = scipy.signal.butter(order, normal_cutoff)
+#     y = scipy.signal.lfilter(b, a, signal)
+#     return y
 
 def mask(signal_a, signals, rank_threshold, window_size, hop_length, sr, max_n):
     '''

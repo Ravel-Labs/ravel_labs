@@ -257,7 +257,7 @@ class DeEsserSignal(Signal):
         self.sharp_thresh = sharp_thresh
         self.max_reduction = max_reduction
         self.cb_fft = preprocessing.critical_band_sum(self.fft, self.bark_idx, len(critical_bands))
-        self.N_z = preprocessing.compute_Nz(self.cb_fft)
+        self.N_z = preprocessing.compute_Nz(self.cb_fft, self.critical_bands)
         self.g_z = np.apply_along_axis(np.exp, 0, (0.171*self.cb_fft))
 
     def compute_sharpness(self):
