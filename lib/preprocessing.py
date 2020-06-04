@@ -266,7 +266,7 @@ def compute_norm_fft_db(x_norm, n_fft, window_size, hop_length):
         input array normalized by target peak amplitude
 
     n_fft: int > 0
-        length of the windowed signal after padding with zeros.
+        length of the windowed signal after padding with zeros
 
     window_size: int <= n_fft
         each frame of audio is windowed by `window()` of length 
@@ -277,7 +277,7 @@ def compute_norm_fft_db(x_norm, n_fft, window_size, hop_length):
 
     Returns
     ----------
-    norm_fft_db: np.ndarray [shape=(n,)], real valued
+    norm_fft_db: np.ndarray [shape=(1 + n_fft/2,n_frames)], real valued
         normalized STFT of input signal on a decibel scale
 
     """

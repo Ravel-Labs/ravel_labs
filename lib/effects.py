@@ -7,7 +7,56 @@ from scipy.io.wavfile import write
 
 
 class Signal:
-    def __init__(self, signal, sr, n_fft, window_size, hop_length, peak, audio_type):
+    """
+    A base class used to represent an audio signal.
+
+    Attributes
+    ----------
+    signal: np.ndarray [shape=(n,)], real valued
+        input signal
+
+    sr: float
+        sample rate
+
+    n_fft: int > 0
+        length of the windowed signal after padding with zeros
+
+    window_size: int <= n_fft
+        each frame of audio is windowed by `window()` of length 
+        `window_size` and then padded with zeros to match `n_fft`
+
+    hop_length: int > 0
+        number of audio samples between adjacent STFT columns
+
+    peak: float
+        target peak of an audio signal on a decibel scale
+
+    audio_type: {'vocal', 'drums', 'bass', other}
+        description of the type of audio signal
+
+    signal_db: np.ndarray [shape=(n,)], real valued
+        input signal on a decibel scale
+
+    x_norm: p.ndarray [shape=(n,)], real valued
+        input signal normalized based on target peak
+
+    fft: np.ndarray [shape=(1 + n_fft/2,n_frames)], real valued
+        STFT of input signal
+
+    num_bins: int > 0
+        number of frequency bins for fft
+
+    fft_db: np.ndarray [shape=(1 + n_fft/2,n_frames)], real valued
+        STFT of input signal on a decibel scale
+
+    norm_fft_db: np.ndarray [shape=(1 + n_fft/2,n_frames)], real valued
+        normalized STFT of input signal on a decibel scale
+
+    freqs: np.ndarray [shape=(num_bins)], float
+        numpy array of frequencies represented by fft transform 
+    """
+    def __init__(self, signal, sr, n_fft, window_size, hop_length, peak, 
+                audio_type):
         self.signal = signal
         self.sr = sr
         self.n_fft = n_fft
@@ -17,31 +66,113 @@ class Signal:
         self.audio_type = audio_type
         self.signal_db = librosa.amplitude_to_db(self.signal)
         self.x_norm = preprocessing.normalize(self.signal, self.peak)
-        self.fft = np.abs(librosa.core.stft(self.signal, n_fft=self.n_fft, 
-                                            win_length=self.window_size, hop_length=self.hop_length))
+        self.fft = np.abs(librosa.core.stft(self.signal, 
+                                            n_fft=self.n_fft, 
+                                            win_length=self.window_size,
+                                            hop_length=self.hop_length))
         self.num_bins = self.fft.shape[0]
         self.fft_db = librosa.amplitude_to_db(self.fft)
-        self.norm_fft_db = preprocessing.compute_norm_fft_db(self.x_norm, self.n_fft, self.window_size, self.hop_length)
-        self.freqs = np.array([i * self.sr / self.fft.shape[0] for i in range(self.num_bins)])
+        self.norm_fft_db = preprocessing.compute_norm_fft_db(self.x_norm, 
+                                self.n_fft, self.window_size, 
+                                self.hop_length)
+        self.freqs = np.array([i * self.sr / self.fft.shape[0] 
+                                for i in range(self.num_bins)])
 
 
 class EQSignal(Signal):
-    def __init__(self, sr, signal, n_fft, window_size, hop_length, peak, audio_type, 
-                rank_threshold, max_n, max_eq):
-        super().__init__(signal, sr, n_fft, window_size, hop_length, peak, audio_type)
-        self.fft_db_avg = np.mean(self.fft_db, axis=1)
-        self.rank = preprocessing.rank_signal_1d(self.fft_db_avg)
+    """
+    A class that represents an audio signal that requires equalization.
+
+    Attributes
+    ----------
+    Base Class: Signal
+        reference Signal class for base class attributes
+
+    rank_threshold: int > 0
+        threshold for whether a frequency bin is considered essential
+
+    max_n: int > 0
+        max number of filters for equalization
+
+    max_eq: float
+        max amount of attentuation for equalization
+
+    fft_db_avg: np.ndarray [shape=(num_bins,)], real valued
+        an average of energy across fft frequency bins on a decibel 
+        scale
+
+    rank: np.ndarray [shape=(num_bins,)], real valued
+        rank of energy in averaged fft from largest to smallest
+
+    masker_rank_vec: np.ndarray [shape=(num_bins,)], boolean
+        vector that returns 1 if the rank of a frequency bin is 
+        considered nonessential and 0 if the bin is considered essential
+   
+    maskee_rank_vec: np.ndarray [shape=(num_bins,)], boolean
+        vector that returns 1 if the rank of a frequency bin is 
+        considered essential and 0 if the bin is considered nonessential        
+
+    Methods
+    ----------
+    compute_mask(signal)
+        computes the amount of spectral masking between two EQSignal
+        objects
+
+    eq_params(signals)
+        computes the equalization parameters for an EQSignal based on
+        its spectral masking between a list of EQSignals
+
+    equalization(eq_info, Q)
+        equalizes an input signal based on a set of filter parameters
+    """
+    def __init__(self, sr, signal, n_fft, window_size, hop_length, 
+                peak, audio_type, rank_threshold, max_n, max_eq):
+        super().__init__(signal, sr, n_fft, window_size, hop_length, 
+                            peak, audio_type)
         self.rank_threshold = rank_threshold
-        self.masker_rank_vec = np.where(self.rank > self.rank_threshold, 1, 0)
-        self.maskee_rank_vec = np.where(self.rank <= self.rank_threshold, 1, 0)
         self.max_n = max_n
         self.max_eq = max_eq
+        self.fft_db_avg = np.mean(self.fft_db, axis=1)
+        self.rank = preprocessing.rank_signal_1d(self.fft_db_avg)
+        self.masker_rank_vec = np.where(self.rank > self.rank_threshold, 1, 0)
+        self.maskee_rank_vec = np.where(self.rank <= self.rank_threshold, 1, 0)
 
     def compute_mask(self, signal):
-        mask_ab = (self.masker_rank_vec * signal.maskee_rank_vec) * (self.fft_db_avg - signal.fft_db_avg)
+        """
+        Computes the amount of spectral masking between two EQSignal
+        objects
+
+        Parameters
+        ----------
+        signal: EQSignal
+            an EQSignal object
+
+        Returns
+        ----------
+        mask_ab: np.ndarray [shape=(num_bins,)], real valued
+            array of values that details the amount of spectral masking
+            between a masker and maskee signal 
+        """
+        mask_ab = (self.masker_rank_vec * signal.maskee_rank_vec) 
+                    * (self.fft_db_avg - signal.fft_db_avg)
         return mask_ab
 
     def eq_params(self, signals):
+        """
+        Computes the equalization parameters for an EQSignal based on
+        its spectral masking between a list of EQSignals.
+        
+        Parameters
+        ----------
+        signals: list, EQSignal
+            a list of EQSignals
+        
+        Returns
+        ----------
+        eq_info: nested list [shape=(n, 3)]
+            nested list with information for applying each equalization 
+            filter
+        """
         num_signals = len(signals)
         num_bins = self.num_bins
         max_n = self.max_n
@@ -74,6 +205,23 @@ class EQSignal(Signal):
         return eq_info
 
     def equalization(self, eq_info, Q):
+        """
+        Equalizes an input signal based on a set of filter parameters.
+
+        Parameters
+        ----------
+        eq_info: nested list [shape=(n, 3)]
+            nested list with information for applying each equalization 
+            filter
+
+        Q: float
+            Q factor used to give the width of the equalization filter
+
+        Returns
+        ----------
+        y: np.ndarray [shape=(n,)], real valued
+            output signal
+        """
         num_filters = len(eq_info)
         y = self.signal
         for i in range(num_filters):
@@ -130,10 +278,67 @@ class EQSignal(Signal):
 
 
 class CompressSignal(Signal):
+    """
+    A class that represents an audio signal that requires compression.
+
+    Attributes
+    ----------
+    Base Class: Signal
+        reference Signal class for base class attributes
+
+    order: int
+        the order of the butterworth filter used for low frequency
+        energy calculation
+
+    cutoff: float
+        critical frequency for filter computing low frequency energy
+
+    std: float
+        standard deviation
+
+    attack_max: float
+        max time for attack
+
+    release_max: float
+        max time for release
+
+    Methods
+    ----------
+    compute_wp(cf_avg)
+        computes the weighted percussivity according to a crest factor
+        average
+
+    compute_lf_weighting(lfa)
+        computes the low frequency weighting based on a low frequency
+        average
+
+    ratio(wf, wp)
+        computes the ratio parameter based on its low frequency energy
+        and weighted percussivity
+
+    threshold(wp)
+        computes the threshold parameter based on its weighted
+        percussivity
+
+    knee_width(threshold)
+        computes the knee_width parameter based on its threshold
+
+    attack()
+        computes the attack parameter for compression
+
+    release()
+        computes the release parameter for compression
+
+    comp_params(cfa, lfa)
+        computes the parameters for the compression of an input signal
+        based on its crest factor and low frequency average
+
+    compression(params)
+        Compresses an input signal
+    """
     def __init__(self, signal, sr, n_fft, window_size, hop_length, peak, audio_type, 
-                time_constant, order, cutoff, std, attack_max, release_max):
+                order, cutoff, std, attack_max, release_max):
         super().__init__(signal, sr, n_fft, window_size, hop_length, peak, audio_type)
-        self.time_constant = time_constant
         self.order = order
         self.cutoff = cutoff
         self.std = std
@@ -145,21 +350,147 @@ class CompressSignal(Signal):
         self.crest_factor = self.peak_db / self.rms_db
         self.lfe = preprocessing.compute_lfe(self.signal, self.order, self.cutoff, self.sr)
     
-    def compute_wp(self, cf_avg): return preprocessing.wp(self.crest_factor, cf_avg, self.std)
+    def compute_wp(self, cf_avg): 
+        """
+        Computes the weighted percussivity according to a crest factor
+        average
 
-    def compute_lf_weighting(self, lfa): return self.lfe / lfa
+        Parameters
+        ----------
+        cf_avg: float
+            crest factor average - measure of transient nature of
+            group of signals
 
-    def ratio(self, wf, wp): return float(0.54*wp + 0.764*wf + 1)
+        Returns
+        ----------
+        wp: float
+            weighted percussivity of an audio signal - measure of
+            percussivity of weighted by the crest factor average 
+        """
+        wp = preprocessing.wp(self.crest_factor, cf_avg, self.std)
+        return wp
 
-    def threshold(self, wp):return float(-11.03 + 0.44*self.rms_db - 4.897*wp)
+    def compute_lf_weighting(self, lfa): 
+        """
+        Computes the low frequency weighting based on a low frequency
+        average.
 
-    def knee_width(self, threshold): return abs(threshold) / 2
+        Parameters
+        ----------
+        lfa: float
+            low frequency average - measure of low frequency energy
+            across audio signals
 
-    def attack(self): return float((2*self.attack_max) / self.crest_factor ** 2)
+        Returns
+        ----------
+        lfw: float
+            low frequency weighting based on low frequency average
+        """       
+        lfw = self.lfe / lfa
+        return lfw
 
-    def release(self): return float((2*self.release_max) / self.crest_factor ** 2)
+    def ratio(self, wf, wp): 
+        """
+        Computes the ratio parameter based on its low frequency energy
+        and weighted percussivity.
+
+        Parameters
+        ----------
+        wf: float
+            low frequency weighting
+
+        wp: float
+            weighted percussivity
+
+        Returns
+        ----------
+        r: float
+            ratio for compression
+        """
+        r = float(0.54*wp + 0.764*wf + 1)
+        return r
+
+    def threshold(self, wp):
+        """
+        Computes the threshold parameter based on its weighted
+        percussivity.
+
+        Parameters
+        ----------
+        wp: float
+            weighted percussivity        
+
+        Returns
+        ----------
+        t: float
+            threshold for compression
+
+        """
+        t =  float(-11.03 + 0.44*self.rms_db - 4.897*wp)
+        return t
+
+    def knee_width(self, threshold): 
+        """
+        Computes the knee_width parameter based on its threshold. 
+        
+        Parameters
+        ----------
+        threshold: float
+            level threshold that activates compression
+
+        Returns
+        ----------
+        kw: float
+            knee width - determines smoothness of compression
+
+        """
+        kw = abs(threshold) / 2
+        return 
+
+    def attack(self): 
+        """
+        Computes the attack parameter for compression
+
+        Returns
+        ----------
+        a: float
+            attack parameter that determines speed at which compression
+            begins after level is above threshold
+        """
+        a = float((2*self.attack_max) / self.crest_factor ** 2)
+        return a
+
+    def release(self): 
+        """
+        Computes the release parameter for compression
+        
+        Returns
+        ----------
+        rel:
+            relaease parameter that determines the speed at which
+            compression ends after level is below threshold
+        """
+        rel = float((2*self.release_max) / self.crest_factor ** 2)
+        return rel
 
     def comp_params(self, cfa, lfa):
+        """
+        Computes the parameters for the compression of an input signal
+        based on its crest factor and low frequency average.
+
+        Parameters
+        ----------
+        cfa: float
+            crest factor average
+
+        lfa: float
+            low frequency average
+
+        Returns
+        ----------
+        params: list, float
+            list of compression parameters to be used for audio effect
+        """
         w_p = self.compute_wp(cfa)
         w_f = self.compute_lf_weighting(lfa)
         r = self.ratio(w_f, w_p)
@@ -167,15 +498,30 @@ class CompressSignal(Signal):
         kw = self.knee_width(t)
         a = self.attack()
         rel = self.release()
-        return [t, r, a, rel, kw]
+        params = [t, r, a, rel, kw]
+        return params
 
     def compression(self, params):
+        """
+        Compresses an input signal.
+        
+        Parameters
+        ----------
+        params: list, float
+            list of compression parameters to be used for audio effect
+
+        Returns
+        ----------
+        y_out: np.ndarray [shape=(n,)], real valued
+            output signal after compression
+        """
         compress = AudioEffectsChain().compand(attack=params[2], decay=params[3], soft_knee=params[1], 
                     threshold=params[0], db_from=params[0], db_to=params[0])
         y = compress(self.signal)
         makeup_gain = preprocessing.compute_makeup_gain(self.signal, y, self.sr)
         gain = (AudioEffectsChain().gain(makeup_gain))
-        return gain(y)
+        y_out = gain(y)
+        return y_out
 
 class FaderSignal(Signal):
     def __init__(self, signal, sr, n_fft, window_size, hop_length, peak, audio_type,
