@@ -832,6 +832,21 @@ def pitch_map(A4=440, num_pitches=88):
     pitch_to_freq = A4 * (2 ** (num_pitches/12))
     return pitch_to_freq
 
+def pitch_shift_fft(fft, pitch_ratio, n_fft):
+    # this function should be iterated for each frame and appending 
+    # to create new full resampled output
+    resampled_output = np.zeros(n_fft)
+    output_length = floor(n_fft / pitch_ratio)
+    for i in range(output_length):
+        x = i * n_fft / output_length
+        ix = floor(x)
+        dx = x - ix
+        resampled_output[i] = fft[ix] * (1.0 - dx) + fft[(ix+1) % n_fft]*dx
+
+def pitch_shift_ifft(full_resampled_output, hop_length, window_size):
+    y_out = librosa.istft(full_resampled_output, hop_length=hop_length, win_length=window_size, center=False)
+    return y_out
+
 def preprocess_pll(x, high_cutoff, low_cutoff, sr, high_order, low_order, x_env):
     x_low = apply_bfilter(x, cutoff=low_cutoff, sr=sr, order=low_order, btype='low')
     x = apply_bfilter(x_low, cutoff=high_cutoff, sr=sr, order=high_order, btype='high')
