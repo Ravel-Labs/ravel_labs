@@ -836,10 +836,10 @@ def pitch_shift_fft(fft, pitch_ratio, n_fft):
     # this function should be iterated for each frame and appending 
     # to create new full resampled output
     resampled_output = np.zeros(n_fft)
-    output_length = floor(n_fft / pitch_ratio)
+    output_length = math.floor(n_fft / pitch_ratio)
     for i in range(output_length):
         x = i * n_fft / output_length
-        ix = floor(x)
+        ix = math.floor(x)
         dx = x - ix
         resampled_output[i] = fft[ix] * (1.0 - dx) + fft[(ix+1) % n_fft]*dx
 

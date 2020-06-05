@@ -153,7 +153,7 @@ class EQSignal(Signal):
             array of values that details the amount of spectral masking
             between a masker and maskee signal 
         """
-        mask_ab = (self.masker_rank_vec * signal.maskee_rank_vec) 
+        mask_ab = (self.masker_rank_vec * signal.maskee_rank_vec) \
                     * (self.fft_db_avg - signal.fft_db_avg)
         return mask_ab
 
@@ -692,16 +692,86 @@ class ReverbSignal(Signal):
 
 
 class SignalAggregator:
-    '''Computes all of the aggregated stats for each effect'''
+    """
+    Computes all of the aggregation based stats for audio effects.
+    
+    Attributes
+    ----------
+    sr: float
+        sample rate
+
+    M: int > 0
+        number of audio signals
+
+    Methods
+    ----------
+    lfa(lfes)
+        computes the low frequency average
+
+    cfa(cfs)
+        computes the crest factor average
+
+    panning_locations(filter_freqs, signal_peaks)
+        computes the panning location for each audio signal
+
+    loudness_avg(channels, holdtime, ltrhold, utrhold, release, attack)
+        computes the loudness average
+    """
     def __init__(self, sr, M):
         self.sr = sr
         self.M = M
 
-    def lfa(self, lfes): return sum([lfe for lfe in lfes]) / self.M
+    def lfa(self, lfes): 
+        """
+        Computes the low frequency average.
 
-    def cfa(self, cfs): return sum([cf for cf in cfs]) / self.M
+        Parameters
+        ----------
 
-    def panning_locations(self, filter_freqs, signal_peaks):
+        lfes: list [len(M)], float
+            list of low frequency energy calculations for M audio 
+            signals
+
+        Returns
+        ----------
+        lfa: float
+            low frequency average for audio signals
+        """
+        lf_avg = sum([lfe for lfe in lfes]) / self.M
+        return lf_avg
+
+    def cfa(self, cfs): 
+        """
+        Computes the crest factor average.
+        
+        Parameters
+        ----------
+        cfs: list [len(M)], float
+            list of crest factor calculations for M audio signals
+
+        Returns
+        ----------
+        cf_avg
+            crest factor average for audio signals
+        """
+        cf_avg = sum([cf for cf in cfs]) / self.M
+        return cf_avg
+
+    def panning_locations(self, signal_peaks):
+        """
+        Computes the panning location for each audio signal.
+
+        Parameters
+        ---------- 
+        signal_peaks:
+            List of signal peaks within filter banks for signals
+
+        Returns
+        ----------
+
+        Ps: nested list [(M, M)]
+            nested list of panning locations
+        """
         N_ks = np.unique(signal_peaks, return_inverse=True, return_counts=True)
         num_k = N_ks[0].shape[0]
         Ps = []
@@ -720,8 +790,40 @@ class SignalAggregator:
                 Ps.append([idx, P[i]])
         return Ps
 
-    def loudness_avg(self, channels, holdtime, ltrhold, utrhold, release, attack):
-        gains = [preprocessing.noise_gate(channels[i], holdtime, ltrhold, utrhold, release, attack, self.sr) 
+    def loudness_avg(self, channels, holdtime, ltrhold, utrhold, 
+                    release, attack):
+        """
+        Computes the loudness average.
+
+        Parameters
+        ----------
+
+        channels: list, np.ndarray [shape=(n,)], real valued
+            loudness per audio signal
+
+        holdtime: float
+            holdtime for noise gate
+
+        ltrhold: float
+            lower threshold for noise gate
+
+        utr: float
+            upper threshold for noise gate
+
+        release: float > 0
+            release for noise gate
+
+        attack: float > 0
+            attack for noise gate 
+
+        Returns
+        ----------
+
+        L_av: np.ndarray [shape=(n,)]
+            Loudness average for each sample
+        """
+        gains = [preprocessing.noise_gate(channels[i], holdtime, 
+                ltrhold, utrhold, release, attack, self.sr) 
                  for i in range(len(channels))]
         gains = [np.where(gain < 1, 0, 1) for gain in gains]
         gain_val = np.array(gains).sum(axis=0)
@@ -730,7 +832,6 @@ class SignalAggregator:
         # L_av = np.where(gain_val > 0, L_c / gain_val, -50)
         L_av = np.ones(gain_val.shape[0]) * -30
         np.divide(L_c, gain_val, out=L_av, where=gain_val != 0)
-        return L_av
         # apply ema filter
         return L_av
 
